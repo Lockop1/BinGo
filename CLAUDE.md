@@ -222,3 +222,161 @@ supabase/
   `supabase db push`.
 - Regenerate types after schema changes (`supabase gen types typescript` → `src/types/`).
 - Never commit `.env*.local` or any secret.
+
+## Database API
+
+Source of truth: `supabase/migrations/` (schema + RLS, RPCs, storage). Types: `src/types/database.ts`
+(generated). Every rule below is enforced in SQL and covered by `npm run db:test`.
+
+### Calling conventions
+
+- Call RPCs with `supabase.rpc("<name>", { ...args })`. Arguments are **named**: use the exact names
+  below. Each RPC returns a single object (not an array), except `auto_end_due_games` (a number).
+- Errors: `error.code === "P0001"` and `error.message` is one of the stable snake_case codes below.
+  Map codes to copy in the UI; never show raw messages. `error.code === "42501"` means the role has
+  no privilege at all (e.g. called without a session); treat it as a bug.
+- Every RPC needs a signed-in (anonymous) user, otherwise `not_authenticated`.
+- Game-scoped RPCs (everything taking `game_id`) answer `game_not_found` both for a nonexistent game
+  and for a game the caller is not a player in, so membership cannot be probed.
+- **Effective status**: an `active` game whose `auto_end_at <= now()` is treated as ended by every RPC
+  (completions get `game_not_active`, joins get `game_ended`, `peek_game` says `ended`) even before
+  the daily cron sets `status = 'ended'`. The UI should compute
+  `ended = status === "ended" || (status === "active" && auto_end_at <= now)`.
+- Errors are checked in the order listed in each row; the first failing check wins.
+
+### Input rules (applied by the RPCs; the client may pre-validate with the same limits)
+
+| Field | Rule |
+| --- | --- |
+| game `name` | whitespace runs collapsed to one space, trimmed; 1–60 chars |
+| `display_name` / `host_name` | collapsed + trimmed; 1–24 chars |
+| square `label` | collapsed + trimmed (single line); 0–40 chars; `null` → `''` |
+| square `details` | trimmed (inner newlines kept); 0–200 chars; `null` → `''` |
+| `target_count` | integer 1–99; `null` → 1 (1 = normal square, >1 = counter square) |
+| `position` | integer 0–24, row-major (`row * 5 + col`); 12 is the center |
+| join `code` | upper-cased, non-alphanumerics stripped (so `abcd-efgh` works); 8 chars from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` |
+
+### RPCs
+
+| RPC (exact argument names) | Returns | Who / when | Errors, in check order |
+| --- | --- | --- | --- |
+| `create_game(name text, host_name text, free_center boolean = true, squares jsonb = '[]')` | `games` row | any signed-in user; caller becomes host and player color 0 (`is_ready = false`); 25 squares created | `not_authenticated`, `invalid_name`, `invalid_display_name`, then per square: `invalid_squares` / `label_too_long` / `details_too_long` / `invalid_target_count`; `join_code_generation_failed` (practically never) |
+| `join_game(code text, display_name text)` | `players` row | any signed-in user; game in `lobby` or `active` (late join). Already a member: returns the existing row (any status) and updates `display_name` unless ended. New players get the lowest free color 0–9 | `not_authenticated`, `invalid_display_name`, `game_not_found`, `game_ended` (ended, overdue or expired), `game_full` (10 players) |
+| `peek_game(code text)` | `game_preview` | any signed-in user (join screen, no membership needed) | `not_authenticated`, `game_not_found` |
+| `set_ready(game_id uuid, ready boolean)` | `players` row (caller) | player; `lobby` only | `not_authenticated`, `game_not_found`, `game_not_in_lobby`, `invalid_argument` (`ready` null) |
+| `update_square(game_id uuid, position integer, label text, details text, target_count integer)` | `squares` row | any player; `lobby` only; replaces label/details/target (last write wins), `current_count` reset to 0 | `not_authenticated`, `game_not_found`, `game_not_in_lobby`, `invalid_position`, `label_too_long`, `details_too_long`, `invalid_target_count` |
+| `set_free_center(game_id uuid, enabled boolean)` | `games` row | host only; `lobby` only | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `invalid_argument` (`enabled` null) |
+| `start_game(game_id uuid)` | `games` row | host only; `lobby` only; **every** player incl. the host must be ready. Sets `status = 'active'`, `started_at = now()`, `auto_end_at = started_at + 24h`. If `free_center`: square 12 completed with `completed_by_player_id = null`, `current_count = target_count`, label `'FREE'` if blank | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `players_not_ready` |
+| `complete_square(game_id uuid, position integer)` | `square_result` | any player; `active` only; only squares with `target_count = 1`. Already completed (by anyone, incl. free center) → `applied = false` + current row, **no error** | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `is_counter` (use `increment_square`) |
+| `increment_square(game_id uuid, position integer, expected_count integer = null)` | `square_result` | any player; `active` only; counter squares (`target_count > 1`). Atomic +1; reaching the target completes it and credits the caller. Already completed → `applied = false`. With `expected_count`, only applies if `current_count = expected_count` (compare-and-set: send the count you saw so a retried request never double-counts; on `applied = false` adopt the returned row) | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `not_counter` |
+| `undo_completion(game_id uuid, position integer)` | `square_result` | the completer or the host; `active` only. Clears completion; `current_count = target_count - 1` (0 for normal squares). Not completed → `applied = false`, no error. Free center (completed by nobody) can never be undone | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `not_allowed` |
+| `end_game(game_id uuid)` | `games` row | host only; from `lobby` or `active`; sets `status = 'ended'`, `ended_at` (= `auto_end_at` if already overdue, else now). Already ended → returns row unchanged | `not_authenticated`, `game_not_found`, `not_host` |
+| `register_media(game_id uuid, position integer, storage_path text, kind text)` | `media` row | any player; game `active` or `ended`, before `expires_at`; square must be completed. `storage_path` = `<game_id>/<segments>` where each segment matches `[A-Za-z0-9_-][A-Za-z0-9._-]*`, max 512 chars; `kind` is `'photo'` or `'video'`. Same path again by the same player/square → returns the existing row | `not_authenticated`, `game_not_found`, `game_not_started` (lobby), `game_expired`, `invalid_kind`, `invalid_storage_path`, `invalid_position`, `square_not_completed`, `invalid_storage_path` (path already used by someone else) |
+| `auto_end_due_games()` | `number` (games ended) | **service_role only** (cleanup cron); no `auth.uid()` check. Ends every `active` game with `auto_end_at <= now()`, setting `ended_at = auto_end_at` | `42501` for any other role |
+
+Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs them):
+`is_game_member(game_id uuid) → boolean`, `is_game_host(game_id uuid) → boolean`,
+`can_upload_game_media(game_id uuid) → boolean`, `safe_uuid(value text) → uuid | null`.
+
+### Return shapes
+
+- `games`: `id, join_code, name, host_user_id, status ('lobby'|'active'|'ended'), free_center, created_at, started_at, ended_at, auto_end_at, expires_at`.
+- `players`: `id, game_id, user_id, display_name, color (0–9 palette index), is_ready, joined_at`. "Me" is the row whose `user_id` equals the session user id.
+- `squares`: `id, game_id, position, label, details, target_count, current_count, completed_by_player_id (null + completed_at set = free center), completed_at (null = open), updated_at`.
+- `media`: `id, game_id, square_id, player_id, storage_path, kind ('photo'|'video'), created_at`.
+- `square_result`: `{ applied: boolean }` plus every `squares` column. `applied = true` means this call
+  changed the square; either way the square columns are the authoritative state after the call, so
+  optimistic clients overwrite their local square with them. (Generated types mark composite fields
+  nullable; in practice only `completed_by_player_id` and `completed_at` can be null.)
+- `game_preview`: `{ name, status, player_count, free_center }`; `status` is the effective status.
+
+### Error codes
+
+| `error.message` | Meaning (suggested UI copy) |
+| --- | --- |
+| `not_authenticated` | No session yet. Sign in anonymously and retry. |
+| `game_not_found` | "We couldn't find that game." (unknown code/id, or not a player in it) |
+| `game_ended` | "This game has already ended." |
+| `game_full` | "This game is full (10 players)." |
+| `game_not_in_lobby` | "The game has already started." (lobby-only action) |
+| `game_not_active` | "The game isn't live." (lobby, ended, or past its 24h limit) |
+| `game_not_started` | "Media can be added once the game starts." |
+| `game_expired` | "This album has expired." |
+| `not_host` | "Only the host can do that." |
+| `not_allowed` | "Only the person who completed it or the host can undo this." / the free space can't be undone |
+| `players_not_ready` | "Everyone needs to tap Ready first." |
+| `invalid_name` | Game name must be 1–60 characters. |
+| `invalid_display_name` | Name must be 1–24 characters. |
+| `invalid_squares` | Malformed `squares` payload (client bug). |
+| `invalid_position` | Position outside 0–24 (client bug). |
+| `label_too_long` | Square text is limited to 40 characters. |
+| `details_too_long` | Details are limited to 200 characters. |
+| `invalid_target_count` | Counter target must be 1–99. |
+| `is_counter` | Counter squares complete via `increment_square`. |
+| `not_counter` | `increment_square` on a normal square (client bug). |
+| `square_not_completed` | Media can only be attached to completed squares. |
+| `invalid_storage_path` | Path not under `<game_id>/`, malformed, or already used by someone else. |
+| `invalid_kind` | `kind` must be `photo` or `video`. |
+| `invalid_argument` | A required boolean was null (client bug). |
+| `join_code_generation_failed` | Could not allocate a join code; retry. |
+
+### Reads, Realtime, Storage, cron
+
+- **Reads**: `authenticated` may `select` from `games`, `players`, `squares`, `media` only for games it
+  is a player in (RLS via `is_game_member`). Direct INSERT/UPDATE/DELETE fail with `42501`; all writes
+  go through the RPCs. `anon` has no table access at all.
+- **Realtime**: all four tables are in `supabase_realtime` with `replica identity full`. Subscribe to
+  `postgres_changes` with filter `game_id=eq.<id>` (`players`, `squares`, `media`) and `id=eq.<id>`
+  (`games`); RLS decides who receives events. A square's `updated_at` strictly increases with every
+  change (stamped after the row lock), so drop any square event older than the row you hold.
+- **Storage** (`game-media`, private, 50 MB, jpeg/png/webp/heic/mp4/quicktime/webm): object name
+  `<game_id>/<position>/<uuid>.<ext>` (lower-case game id as returned by the DB). Members may upload
+  while the game is active or ended and before `expires_at`, only as themselves; upload with
+  `upsert: false` (there is no UPDATE policy). Then call `register_media` with the same path. Read
+  only via `createSignedUrl` (members only). The uploader or the host may delete an object (there is
+  no RPC that deletes a `media` row yet).
+- **Cron** (`/api/cron/cleanup`, service-role client): `rpc("auto_end_due_games")`, then remove
+  storage objects of games with `expires_at < now()`, then `delete from games where expires_at < now()`
+  (cascades to players, squares, media). service_role keeps its table privileges for this.
+
+### Regenerating `src/types/database.ts`
+
+Against a real project: `npx supabase gen types typescript --linked --schema public`. Locally without
+Docker, after `npm run db:test` has built `bingo_test`:
+
+```
+psql postgresql://postgres@127.0.0.1:54329/bingo_test -c "drop extension if exists pgcrypto"   # shim-only, keeps it out of the types
+npx supabase gen types typescript --db-url "postgresql://postgres@127.0.0.1:54329/bingo_test?sslmode=disable" --schema public
+```
+
+The CLI output is unformatted; format it before committing (it was reprinted with the TypeScript
+compiler's printer, 2-space indent) and keep the header comment.
+
+### Running the DB tests
+
+- `npm run db:test` (= `scripts/db-test.sh`). Needs `psql` and a local Postgres 16+ cluster at
+  `127.0.0.1:54329` with a trust-auth superuser `postgres` (override with `BINGO_DB_HOST`,
+  `BINGO_DB_PORT`, `BINGO_DB_USER`). No Docker, no Supabase project.
+- It drops and recreates the database **`bingo_test`** (never any other name), applies
+  `supabase/tests/local_shim.sql`, applies every migration in filename order (one transaction each,
+  `ON_ERROR_STOP`), loads `supabase/tests/test_helpers.sql`, then runs every
+  `supabase/tests/*.test.sql` and `*.test.sh`. It prints one `PASS (<id>)` / `FAIL (<id>)` line per
+  test and exits non-zero on any failure or if a required id (a)–(n) did not pass.
+- Writing a test: `select tests.run('<id>', '<description>', $body$ <plpgsql block> $body$);`. The
+  block runs in a subtransaction that is always rolled back. Use `tests.make_game(n, free_center,
+  squares)` / `tests.start_game(f)` fixtures, `tests.login(uid)` / `tests.login_anon()` /
+  `tests.login_service()` / `tests.logout()` to switch roles (sets `request.jwt.claims` and
+  `SET LOCAL ROLE`), and `tests.is` / `tests.ok` / `tests.throws(stmt, code)` /
+  `tests.denied(stmt)` (privilege missing) / `tests.rls_denied(stmt)` (RLS rejected the row).
+  `*.test.sh` files get the database URL as `$1` and print their own PASS/FAIL line (used for the
+  multi-session concurrent-join test).
+- Shim caveat: the shim only emulates what the migrations touch: the `anon` / `authenticated` /
+  `service_role` / `authenticator` roles, Supabase-style default privileges on `public`,
+  `auth.users` (stub) and `auth.uid()/jwt()/role()` read from `request.jwt.claims`, stub
+  `storage.buckets` / `storage.objects` (RLS on) with `storage.foldername()`, and the
+  `supabase_realtime` publication. No PostgREST, GoTrue, storage server (so bucket size/MIME limits
+  and owner stamping are not exercised; tests set `owner`/`owner_id` themselves) or Realtime server.
+  It runs Postgres 16 while hosted is 17, and it installs `pgcrypto` into `public` (hosted:
+  `extensions`), so migrations must not rely on pgcrypto. Never apply the shim or `test_helpers.sql`
+  to a real project. A green suite is necessary but not sufficient: after `npx supabase db push`,
+  smoke-test create/join/complete/upload against the real project.

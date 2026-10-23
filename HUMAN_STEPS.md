@@ -71,6 +71,6 @@ complete → photo → bingo → end → recap.
 ---
 Items below are filled in by the build as phases land.
 
-- [ ] Phase 1 migrations ready to push
+- [x] Phase 1 migrations ready to push (`supabase/migrations/2026102320425{4,6,8}_*.sql`)
 - [ ] Cron route + `vercel.json` ready
 - [ ] Deploy checklist reviewed

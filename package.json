@@ -6,7 +6,15 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:test": "bash scripts/db-test.sh",
+    "backend:reset": "node scripts/local-backend/cli.mjs reset",
+    "backend:migrate": "node scripts/local-backend/cli.mjs migrate",
+    "backend:start": "node scripts/local-backend/cli.mjs start --detach",
+    "backend:stop": "node scripts/local-backend/cli.mjs stop",
+    "backend:status": "node scripts/local-backend/cli.mjs status",
+    "backend:env": "node scripts/local-backend/cli.mjs env",
+    "backend:smoke": "node scripts/local-backend/cli.mjs smoke"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
