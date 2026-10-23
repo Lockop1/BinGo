@@ -1,0 +1,76 @@
+# Human steps (do these when you're back)
+
+The sandbox that built this app cannot reach Supabase or Vercel, so the
+steps below could not be done for you. Everything else is built and tested
+against a local Postgres + PostgREST + GoTrue stand-in (see
+`scripts/local-backend/README.md`). Work through this list top to bottom.
+
+## 1. Create the Supabase project (~5 min)
+
+1. https://supabase.com/dashboard → **New project**. Any name/region. Save the
+   database password somewhere; you need it for step 2.
+2. **Authentication → Sign In / Providers → Anonymous sign-ins → Enable**.
+   (`supabase/config.toml` also has `enable_anonymous_sign_ins = true`, but the
+   hosted project needs the dashboard toggle or `supabase config push`.)
+3. **Project Settings → API**: copy the **Project URL**, the **anon public** key
+   and the **service_role** key.
+4. On your machine, in the repo root, create `.env.local`:
+
+   ```
+   NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
+   SUPABASE_SERVICE_ROLE_KEY=<service_role key>   # server-only, never NEXT_PUBLIC_
+   CRON_SECRET=<any long random string>
+   NEXT_PUBLIC_APP_URL=http://localhost:3000
+   ```
+
+## 2. Push the schema (~2 min)
+
+```
+npm install
+npx supabase login            # opens a browser for an access token
+npx supabase link --project-ref <ref>
+npx supabase db push          # applies supabase/migrations/* in order
+npx supabase config push      # optional: pushes config.toml (anonymous sign-ins etc.)
+```
+
+Then verify in the dashboard: **Database → Replication** shows the
+`supabase_realtime` publication including `games`, `players`, `squares`,
+`media`; **Storage** shows a private bucket `game-media`.
+
+## 3. Run it locally against the real project
+
+```
+npm run dev
+```
+
+Open http://localhost:3000 in a normal window and an incognito window; create
+a game in one, join it from the other.
+
+## 4. Deploy to Vercel
+
+1. Import the GitHub repo in Vercel (framework preset: Next.js).
+2. **Environment variables** (Production + Preview):
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `SUPABASE_SERVICE_ROLE_KEY` (server-only; Vercel keeps it off the client
+     because it has no `NEXT_PUBLIC_` prefix)
+   - `CRON_SECRET` (Vercel Cron sends it as a bearer token to
+     `/api/cron/cleanup`)
+   - `NEXT_PUBLIC_APP_URL` = your production URL (e.g. `https://bingo-night.vercel.app`)
+3. Deploy. `vercel.json` already schedules the daily cleanup cron.
+4. In Supabase **Authentication → URL Configuration**, set **Site URL** to the
+   production URL and add it to **Redirect URLs**.
+
+## 5. Real-device check
+
+Open the production URL on an iPhone (Safari) and an Android phone, add it to
+the home screen, and run one full game: create → join → edit → ready → start →
+complete → photo → bingo → end → recap.
+
+---
+Items below are filled in by the build as phases land.
+
+- [ ] Phase 1 migrations ready to push
+- [ ] Cron route + `vercel.json` ready
+- [ ] Deploy checklist reviewed
