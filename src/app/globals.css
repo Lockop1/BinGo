@@ -150,3 +150,76 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* ------------------------------------------------------------------------
+ * Lobby (Phase 3)
+ */
+:root {
+  --sync-live: #2e7d32;
+  --sync-wait: #7a6a00;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sync-live: #5ee07a;
+    --sync-wait: #ffd23f;
+  }
+}
+
+/* Bottom-anchored action bar: plain paper with the margin line, a pencil rule on top. */
+@utility lobby-dock {
+  background-color: var(--paper);
+  background-image: linear-gradient(
+    to right,
+    transparent var(--margin-x),
+    var(--paper-margin) var(--margin-x),
+    var(--paper-margin) calc(var(--margin-x) + 2px),
+    transparent calc(var(--margin-x) + 2px)
+  );
+  border-top: 2px solid var(--ink);
+  border-radius: 14px 6px 0 0 / 4px 3px 0 0;
+}
+
+/* Top edge of a bottom sheet: torn-from-the-pad pencil outline. */
+@utility sheet-edge {
+  border-top: 2px solid var(--ink);
+  border-radius: 18px 10px 0 0 / 8px 5px 0 0;
+  box-shadow: 0 -2px 0 var(--ink-faint);
+}
+
+/* Square labels on the lobby grid: three size steps, wrap anywhere, clamp at 3 lines. */
+.square-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+}
+.square-label[data-size="lg"] {
+  font-size: 15px;
+  line-height: 17px;
+}
+.square-label[data-size="md"] {
+  font-size: 12.5px;
+  line-height: 14px;
+}
+.square-label[data-size="sm"] {
+  font-size: 11px;
+  line-height: 12.5px;
+}
+
+/* Pencil check: stroke drawn in on appearance (instant with reduced motion). */
+@keyframes pencil-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.pencil-check path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: pencil-draw 260ms ease-out both;
+}

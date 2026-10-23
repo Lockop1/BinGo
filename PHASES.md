@@ -8,8 +8,8 @@ Update the checkbox and status notes as each phase lands. See `CLAUDE.md` for in
   - Status notes: DONE. 3 migrations (core schema + RLS, 13 RPCs, private game-media bucket + storage policies), 21/21 SQL tests green via `npm run db:test` on the local shim, generated `src/types/database.ts`, Database API table in CLAUDE.md. Not yet pushed to a hosted project (needs the human: `npx supabase db push`). Local PostgREST+GoTrue harness in `scripts/local-backend` (`npm run backend:*`).
 - [x] **Phase 2 — Home, create, join**
   - Status notes: DONE. Silent anonymous sign-in (SessionProvider/SessionGate), typed RPC wrappers + GameError copy, 10-color palette with contrast tests, starter packs (Night Out, Day Adventure, Blank) with safety tests, paper-look home `/`, create `/new`, join `/g/[code]`, game stub `/game/[id]` with `useGame`. Playwright e2e (two contexts create+join) green against the local backend: `npm run e2e`.
-- [ ] **Phase 3 — Lobby**
-  - Status notes: not started.
+- [x] **Phase 3 — Lobby**
+  - Status notes: DONE. Realtime channel per game (postgres_changes on games/players/squares) + resync on SUBSCRIBED/visibility/online/poll (`NEXT_PUBLIC_SYNC_POLL_MS`, default 15s), pure merge reducers unit-tested; paper lobby with invite share/copy, player list with ready checks, Ready dock, host free-space toggle + Start (enabled only when all ready), square editor sheet with last-write-wins + conflict prompt. e2e `e2e/lobby.spec.ts` green via the poll path (Realtime events cannot be exercised locally).
 - [ ] **Phase 4 — Live board** [EXTRA-HIGH]
   - Status notes: not started.
 - [ ] **Phase 5 — Themes, transition, settings**

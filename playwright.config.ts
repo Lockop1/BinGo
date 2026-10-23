@@ -33,5 +33,8 @@ export default defineConfig({
     timeout: 120_000,
     stdout: "ignore",
     stderr: "pipe",
+    // Fast resync poll so cross-phone changes show up without Realtime events
+    // (the local backend's Realtime stub never delivers any). Code default: 15000.
+    env: { NEXT_PUBLIC_SYNC_POLL_MS: "1500" },
   },
 });
