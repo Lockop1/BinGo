@@ -1,0 +1,76 @@
+import { describe, expect, it } from "vitest";
+import { MAX_QUEUED, TOAST_MS, createToastQueue } from "@/lib/game/toasts";
+import { manualClock } from "@/lib/game/testFixtures";
+
+function setup() {
+  const clock = manualClock();
+  const queue = createToastQueue({ setTimer: clock.setTimer, clearTimer: clock.clearTimer });
+  return { clock, queue };
+}
+
+describe("toast queue", () => {
+  it("shows one toast at a time for ~2.5 s, the rest wait in line", () => {
+    const { clock, queue } = setup();
+    queue.push({ text: "Jake got Karaoke", color: 2, position: 0 });
+    queue.push({ text: "Ana got Pool", color: 4, position: 17 });
+    expect(queue.getState().current).toMatchObject({ text: "Jake got Karaoke", tone: "info", color: 2, position: 0 });
+    expect(queue.getState().queued.map((t) => t.text)).toEqual(["Ana got Pool"]);
+    clock.advance(TOAST_MS - 1);
+    expect(queue.getState().current?.text).toBe("Jake got Karaoke");
+    clock.advance(1);
+    expect(queue.getState().current?.text).toBe("Ana got Pool");
+    expect(queue.getState().queued).toEqual([]);
+    clock.advance(TOAST_MS);
+    expect(queue.getState().current).toBeNull();
+    expect(clock.pending()).toBe(0);
+  });
+
+  it("dismissing (tap) moves to the next toast and restarts the timer", () => {
+    const { clock, queue } = setup();
+    const first = queue.push({ text: "one" })!;
+    queue.push({ text: "two" });
+    clock.advance(2000);
+    queue.dismiss(first.id);
+    expect(queue.getState().current?.text).toBe("two");
+    clock.advance(TOAST_MS - 1);
+    expect(queue.getState().current?.text).toBe("two");
+  });
+
+  it("dismissing a waiting toast by id drops just that one", () => {
+    const { queue } = setup();
+    queue.push({ text: "one" });
+    const second = queue.push({ text: "two" })!;
+    queue.push({ text: "three" });
+    queue.dismiss(second.id);
+    expect(queue.getState().current?.text).toBe("one");
+    expect(queue.getState().queued.map((t) => t.text)).toEqual(["three"]);
+  });
+
+  it("caps the waiting line, dropping the oldest", () => {
+    const { queue } = setup();
+    queue.push({ text: "now" });
+    for (let i = 0; i < MAX_QUEUED + 3; i++) queue.push({ text: `t${i}` });
+    expect(queue.getState().current?.text).toBe("now");
+    expect(queue.getState().queued).toHaveLength(MAX_QUEUED);
+    expect(queue.getState().queued[MAX_QUEUED - 1].text).toBe(`t${MAX_QUEUED + 2}`);
+  });
+
+  it("drops an identical toast right behind the same one", () => {
+    const { queue } = setup();
+    expect(queue.push({ text: "Jake got Karaoke" })).not.toBeNull();
+    expect(queue.push({ text: "Jake got Karaoke" })).toBeNull();
+    expect(queue.getState().queued).toEqual([]);
+  });
+
+  it("clear empties everything; listeners hear every change", () => {
+    const { queue } = setup();
+    let calls = 0;
+    const off = queue.subscribe(() => calls++);
+    queue.push({ text: "a", tone: "error" });
+    queue.push({ text: "b" });
+    queue.clear();
+    expect(queue.getState()).toEqual({ current: null, queued: [] });
+    expect(calls).toBe(3);
+    off();
+  });
+});

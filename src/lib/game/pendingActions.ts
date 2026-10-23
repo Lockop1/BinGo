@@ -1,0 +1,484 @@
+import { toGameError, type GameErrorCode } from "@/lib/game/errors";
+import { isNewerSquare } from "@/lib/game/realtime";
+import type { Square, SquareResult } from "@/lib/game/types";
+
+/**
+ * Optimistic completions: a small queue of this phone's square actions
+ * (complete / +1 / undo), independent of React.
+ *
+ * - `enqueue` records the intent; the board immediately shows it as an overlay
+ *   on top of the server state (see boardState.ts), so a tap crosses the
+ *   square off at once, even offline.
+ * - `flush` sends actions through the RPCs: one at a time per square (in tap
+ *   order), squares in parallel, only while the browser says it is online.
+ *   Network / unknown failures retry with exponential backoff (max ~30 s);
+ *   `resume` (on `online` / tab visible) retries right away.
+ * - Settling an action stores the returned `square_result` row as the
+ *   authoritative view of that square (so there is no flash between "pending"
+ *   and the refetched row) and drops the overlay. `applied = false` is not an
+ *   error: the returned row (e.g. someone else got it first) simply wins.
+ *   A definitive game error (`game_not_active`, `not_allowed`, …) drops the
+ *   action and is reported once.
+ * - Queued items are plain JSON (no functions), saved through a pluggable
+ *   `persistence` (memory by default; Phase 7 plugs in localStorage).
+ *
+ * The server stays the authority: nothing here decides whether a completion
+ * is allowed, it only predicts and then adopts what the RPC returns.
+ */
+
+export type PendingKind = "complete" | "increment" | "undo";
+
+export type PendingAction = {
+  /** Client-generated id of this action. */
+  clientId: string;
+  kind: PendingKind;
+  gameId: string;
+  position: number;
+  /** The acting player (this phone's player row), shown as the predicted completer. */
+  playerId: string;
+  /** increment: the count shown when +1 was tapped (sent as `expected_count`). */
+  expectedCount?: number;
+  /** undo: the completer shown when Undo was tapped (null: unknown). */
+  expectedCompleter?: string | null;
+  /**
+   * undo queued behind another action on the same square that may already
+   * have reached the server: it only goes out if, once that action settles,
+   * the square is still completed by `expectedCompleter`.
+   */
+  afterClientId?: string;
+  /** ISO time of the tap (the optimistic `completed_at`). */
+  createdAt: string;
+  /** Sends attempted so far; > 0 means the server may already have applied it. */
+  attempts: number;
+  /** Epoch ms before which a retry is not attempted (backoff). */
+  nextAttemptAt?: number;
+};
+
+export type EnqueueInput = {
+  kind: PendingKind;
+  gameId: string;
+  position: number;
+  playerId: string;
+  expectedCount?: number;
+  expectedCompleter?: string | null;
+  clientId?: string;
+};
+
+export type EnqueueResult =
+  | { status: "queued"; action: PendingAction }
+  /** The same intent is already waiting for this square (ignored). */
+  | { status: "duplicate"; clientId: string }
+  /** The new intent cancelled an unsent opposite one (e.g. undo of an unsent complete). */
+  | { status: "cancelled"; clientId: string };
+
+export type SettleOutcome = "applied" | "not_applied" | "failed" | "skipped" | "cancelled";
+
+export type Settled = {
+  action: PendingAction;
+  outcome: SettleOutcome;
+  /** The authoritative square after the call (`applied` and `not_applied`). */
+  row: Square | null;
+  /** `failed`: the definitive error. */
+  errorCode: GameErrorCode | null;
+};
+
+/** The latest RPC result row per square, held until a newer server row replaces it. */
+export type ResultEntry = { row: Square; kind: PendingKind; applied: boolean; clientId: string };
+
+export type PendingState = {
+  actions: readonly PendingAction[];
+  inFlight: readonly string[];
+  results: Readonly<Record<string, ResultEntry>>;
+  /** The last settled action per square (for the sheet: "Jake got it first", error copy). */
+  outcomes: Readonly<Record<string, Settled>>;
+};
+
+export type PendingPersistence = {
+  load(): readonly unknown[] | null;
+  save(actions: readonly PendingAction[]): void;
+};
+
+export type PendingRunner = (action: PendingAction) => Promise<SquareResult>;
+
+type Timer = unknown;
+
+export type PendingOptions = {
+  run: PendingRunner;
+  persistence?: PendingPersistence;
+  isOnline?: () => boolean;
+  now?: () => number;
+  setTimer?: (fn: () => void, ms: number) => Timer;
+  clearTimer?: (timer: Timer) => void;
+  random?: () => number;
+  createId?: () => string;
+  baseBackoffMs?: number;
+  maxBackoffMs?: number;
+};
+
+export type PendingStore = {
+  getState(): PendingState;
+  subscribe(listener: () => void): () => void;
+  onSettled(listener: (settled: Settled) => void): () => void;
+  enqueue(input: EnqueueInput): EnqueueResult;
+  /** Send whatever is due (no-op while offline). */
+  flush(): void;
+  /** Back online / back in the tab: retry everything now, ignoring backoff. */
+  resume(): void;
+  clearOutcome(gameId: string, position: number): void;
+  /** Forget everything held for one game. */
+  clearGame(gameId: string): void;
+  dispose(): void;
+};
+
+export const BASE_BACKOFF_MS = 1000;
+export const MAX_BACKOFF_MS = 30_000;
+
+export function squareKey(gameId: string, position: number): string {
+  return `${gameId}:${position}`;
+}
+
+const keyOf = (a: Pick<PendingAction, "gameId" | "position">) => squareKey(a.gameId, a.position);
+
+/** Network trouble or no session yet: worth retrying. Everything else is the server's final answer. */
+const TRANSIENT = new Set<GameErrorCode>(["unknown", "not_authenticated"]);
+
+export function isDefinitiveError(code: GameErrorCode): boolean {
+  return !TRANSIENT.has(code);
+}
+
+/** Exponential backoff for the n-th failed attempt (1-based), ±20% jitter, capped. */
+export function backoffMs(
+  attempts: number,
+  { base = BASE_BACKOFF_MS, max = MAX_BACKOFF_MS, random = Math.random }: { base?: number; max?: number; random?: () => number } = {},
+): number {
+  const exp = Math.min(max, base * 2 ** Math.max(0, attempts - 1));
+  return Math.min(max, Math.round(exp * (0.8 + random() * 0.4)));
+}
+
+const KINDS = new Set<PendingKind>(["complete", "increment", "undo"]);
+
+/** Shape check for restored items (persistence may hold anything). */
+export function isPendingAction(value: unknown): value is PendingAction {
+  if (!value || typeof value !== "object") return false;
+  const a = value as Record<string, unknown>;
+  return (
+    typeof a.clientId === "string" &&
+    typeof a.kind === "string" &&
+    KINDS.has(a.kind as PendingKind) &&
+    typeof a.gameId === "string" &&
+    typeof a.position === "number" &&
+    Number.isInteger(a.position) &&
+    typeof a.playerId === "string" &&
+    typeof a.createdAt === "string" &&
+    typeof a.attempts === "number" &&
+    (a.expectedCount === undefined || typeof a.expectedCount === "number") &&
+    (a.expectedCompleter === undefined || a.expectedCompleter === null || typeof a.expectedCompleter === "string") &&
+    (a.afterClientId === undefined || typeof a.afterClientId === "string")
+  );
+}
+
+/** Default persistence: keeps the queue in memory only (lost on reload). */
+export function memoryPersistence(initial: readonly unknown[] = []): PendingPersistence & {
+  saved(): PendingAction[];
+} {
+  let saved: PendingAction[] = initial.filter(isPendingAction);
+  return {
+    load: () => saved,
+    save: (actions) => {
+      saved = actions.map((a) => ({ ...a }));
+    },
+    saved: () => saved,
+  };
+}
+
+function defaultIsOnline(): boolean {
+  return typeof navigator === "undefined" || navigator.onLine !== false;
+}
+
+function defaultId(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  } catch {
+    // Insecure context: fall through.
+  }
+  return `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Strip the `applied` flag: what is left is a plain squares row. */
+function toSquare(result: SquareResult): Square {
+  const row: Partial<SquareResult> = { ...result };
+  delete row.applied;
+  return row as Square;
+}
+
+function withoutChain(action: PendingAction): PendingAction {
+  const copy = { ...action };
+  delete copy.afterClientId;
+  return copy;
+}
+
+/** A chained undo still makes sense: the square is completed by whoever the player meant to undo. */
+function chainHolds(undo: PendingAction, row: Square | null): boolean {
+  if (!row || row.completed_at === null || row.completed_by_player_id === null) return false;
+  return undo.expectedCompleter == null || row.completed_by_player_id === undo.expectedCompleter;
+}
+
+export function createPendingActions(options: PendingOptions): PendingStore {
+  const {
+    run,
+    persistence = memoryPersistence(),
+    isOnline = defaultIsOnline,
+    now = Date.now,
+    random = Math.random,
+    createId = defaultId,
+    baseBackoffMs = BASE_BACKOFF_MS,
+    maxBackoffMs = MAX_BACKOFF_MS,
+  } = options;
+  const setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearTimer = options.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>));
+
+  // Restored items were possibly mid-flight: they count as attempted (in doubt).
+  const restored = (persistence.load() ?? []).filter(isPendingAction).map((a) => {
+    const copy = { ...a };
+    delete copy.nextAttemptAt;
+    return copy;
+  });
+
+  let state: PendingState = { actions: restored, inFlight: [], results: {}, outcomes: {} };
+  const listeners = new Set<() => void>();
+  const settledListeners = new Set<(settled: Settled) => void>();
+  const timers = new Set<Timer>();
+  let disposed = false;
+
+  function commit(patch: Partial<PendingState>, persist: boolean) {
+    state = { ...state, ...patch };
+    if (persist) persistence.save(state.actions);
+    listeners.forEach((listener) => listener());
+  }
+
+  function emit(settled: Settled) {
+    settledListeners.forEach((listener) => listener(settled));
+  }
+
+  function withoutOutcome(key: string): PendingState["outcomes"] {
+    if (!(key in state.outcomes)) return state.outcomes;
+    const outcomes = { ...state.outcomes };
+    delete outcomes[key];
+    return outcomes;
+  }
+
+  const isUnsent = (a: PendingAction) => a.attempts === 0 && !state.inFlight.includes(a.clientId);
+
+  function cancel(action: PendingAction, key: string): EnqueueResult {
+    commit(
+      { actions: state.actions.filter((a) => a.clientId !== action.clientId), outcomes: withoutOutcome(key) },
+      true,
+    );
+    emit({ action, outcome: "cancelled", row: null, errorCode: null });
+    return { status: "cancelled", clientId: action.clientId };
+  }
+
+  function enqueue(input: EnqueueInput): EnqueueResult {
+    const key = squareKey(input.gameId, input.position);
+    const forSquare = state.actions.filter((a) => keyOf(a) === key);
+    const last = forSquare[forSquare.length - 1];
+
+    // (f) The same intent is already waiting: ignore the repeat tap.
+    if (input.kind === "complete" && last?.kind === "complete") return { status: "duplicate", clientId: last.clientId };
+    if (input.kind === "undo" && last?.kind === "undo") return { status: "duplicate", clientId: last.clientId };
+    if (input.kind === "increment") {
+      const same = forSquare.find((a) => a.kind === "increment" && a.expectedCount === input.expectedCount);
+      if (same) return { status: "duplicate", clientId: same.clientId };
+    }
+
+    // (g) Undo of a completion that never left the phone: drop both locally.
+    if (input.kind === "undo" && last?.kind === "complete" && isUnsent(last)) return cancel(last, key);
+    // …and the mirror: re-completing right after an unsent undo of my own completion.
+    if (
+      input.kind === "complete" &&
+      last?.kind === "undo" &&
+      isUnsent(last) &&
+      last.expectedCompleter === input.playerId
+    ) {
+      return cancel(last, key);
+    }
+
+    const action: PendingAction = {
+      clientId: input.clientId ?? createId(),
+      kind: input.kind,
+      gameId: input.gameId,
+      position: input.position,
+      playerId: input.playerId,
+      createdAt: new Date(now()).toISOString(),
+      attempts: 0,
+    };
+    if (input.kind === "increment" && input.expectedCount !== undefined) action.expectedCount = input.expectedCount;
+    if (input.kind === "undo") {
+      action.expectedCompleter = input.expectedCompleter ?? null;
+      // Something on this square is still in the air: decide once it lands.
+      if (last) action.afterClientId = last.clientId;
+    }
+
+    commit({ actions: [...state.actions, action], outcomes: withoutOutcome(key) }, true);
+    flush();
+    return { status: "queued", action };
+  }
+
+  function schedule(ms: number) {
+    const timer = setTimer(() => {
+      timers.delete(timer);
+      flush();
+    }, ms);
+    timers.add(timer);
+  }
+
+  function settle(action: PendingAction, outcome: SettleOutcome, row: Square | null, errorCode: GameErrorCode | null) {
+    const key = keyOf(action);
+    let results = state.results;
+    if (row) {
+      const held = results[key];
+      if (!held || !isNewerSquare(held.row, row)) {
+        results = { ...results, [key]: { row, kind: action.kind, applied: outcome === "applied", clientId: action.clientId } };
+      }
+    }
+    const settled: Settled = { action, outcome, row, errorCode };
+    const skipped: Settled[] = [];
+    const actions = state.actions.flatMap((a) => {
+      if (a.clientId === action.clientId) return [];
+      if (a.kind !== "undo" || a.afterClientId !== action.clientId) return [a];
+      if (chainHolds(a, row)) return [withoutChain(a)];
+      skipped.push({ action: a, outcome: "skipped", row, errorCode: null });
+      return [];
+    });
+    commit({ actions, results, outcomes: { ...state.outcomes, [key]: settled } }, true);
+    emit(settled);
+    skipped.forEach(emit);
+  }
+
+  async function send(action: PendingAction) {
+    const sending: PendingAction = { ...action, attempts: action.attempts + 1 };
+    delete sending.nextAttemptAt;
+    commit(
+      {
+        actions: state.actions.map((a) => (a.clientId === action.clientId ? sending : a)),
+        inFlight: [...state.inFlight, action.clientId],
+      },
+      true,
+    );
+
+    let result: SquareResult;
+    try {
+      result = await run(sending);
+    } catch (error) {
+      if (disposed) return;
+      const inFlight = state.inFlight.filter((id) => id !== action.clientId);
+      const current = state.actions.find((a) => a.clientId === action.clientId);
+      if (!current) {
+        commit({ inFlight }, false);
+      } else {
+        const code = toGameError(error).code;
+        if (isDefinitiveError(code)) {
+          state = { ...state, inFlight };
+          settle(current, "failed", null, code);
+        } else {
+          const delay = backoffMs(current.attempts, { base: baseBackoffMs, max: maxBackoffMs, random });
+          const retrying = { ...current, nextAttemptAt: now() + delay };
+          commit({ inFlight, actions: state.actions.map((a) => (a.clientId === action.clientId ? retrying : a)) }, true);
+          schedule(delay);
+        }
+      }
+      flush();
+      return;
+    }
+
+    if (disposed) return;
+    const inFlight = state.inFlight.filter((id) => id !== action.clientId);
+    const current = state.actions.find((a) => a.clientId === action.clientId) ?? sending;
+    state = { ...state, inFlight };
+    settle(current, result.applied ? "applied" : "not_applied", toSquare(result), null);
+    flush();
+  }
+
+  function flush() {
+    if (disposed || !isOnline()) return;
+    const t = now();
+    const heads = new Set<string>();
+    for (const action of [...state.actions]) {
+      const key = keyOf(action);
+      if (heads.has(key)) continue; // one at a time per square, in order
+      heads.add(key);
+      if (state.inFlight.includes(action.clientId)) continue;
+      if (action.nextAttemptAt !== undefined && action.nextAttemptAt > t) continue;
+      if (action.afterClientId) {
+        // Its predecessor is gone without resolving the chain (e.g. restored
+        // from storage): fall back to the last result row we hold.
+        if (!chainHolds(action, state.results[key]?.row ?? null)) {
+          commit({ actions: state.actions.filter((a) => a.clientId !== action.clientId) }, true);
+          emit({ action, outcome: "skipped", row: null, errorCode: null });
+          continue;
+        }
+        const resolved = withoutChain(action);
+        commit({ actions: state.actions.map((a) => (a.clientId === action.clientId ? resolved : a)) }, true);
+        void send(resolved);
+        continue;
+      }
+      void send(action);
+    }
+  }
+
+  return {
+    getState: () => state,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    onSettled(listener) {
+      settledListeners.add(listener);
+      return () => settledListeners.delete(listener);
+    },
+    enqueue,
+    flush,
+    resume() {
+      timers.forEach((timer) => clearTimer(timer));
+      timers.clear();
+      if (state.actions.some((a) => a.nextAttemptAt !== undefined)) {
+        commit(
+          {
+            actions: state.actions.map((a) => {
+              if (a.nextAttemptAt === undefined) return a;
+              const copy = { ...a };
+              delete copy.nextAttemptAt;
+              return copy;
+            }),
+          },
+          true,
+        );
+      }
+      flush();
+    },
+    clearOutcome(gameId, position) {
+      const key = squareKey(gameId, position);
+      if (key in state.outcomes) commit({ outcomes: withoutOutcome(key) }, false);
+    },
+    clearGame(gameId) {
+      const prefix = `${gameId}:`;
+      const keep = <T,>(record: Readonly<Record<string, T>>) =>
+        Object.fromEntries(Object.entries(record).filter(([k]) => !k.startsWith(prefix)));
+      commit(
+        {
+          actions: state.actions.filter((a) => a.gameId !== gameId),
+          results: keep(state.results),
+          outcomes: keep(state.outcomes),
+        },
+        true,
+      );
+    },
+    dispose() {
+      disposed = true;
+      timers.forEach((timer) => clearTimer(timer));
+      timers.clear();
+      listeners.clear();
+      settledListeners.clear();
+    },
+  };
+}

@@ -14,6 +14,9 @@ type LocalSchema = {
   "bingo.displayName": string;
   /** Placeholder for Phase 7 (instant return to the active board). */
   "bingo.activeGame": ActiveGameRecord;
+} & {
+  /** Bingo line ids (and "blackout") this phone has already celebrated for a game. */
+  [key: `bingo.celebrated.${string}`]: string[];
 };
 
 export type LocalKey = keyof LocalSchema;

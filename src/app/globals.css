@@ -223,3 +223,197 @@ body {
   stroke-dashoffset: 0;
   animation: pencil-draw 260ms ease-out both;
 }
+
+/* ------------------------------------------------------------------------
+ * Live board (Phase 4). Theme plumbing: every board color and the font are
+ * custom properties on the `.board` root. These are provisional Whiteboard
+ * values; Phase 5 adds Dark Scoreboard as `.board[data-theme="scoreboard"]`
+ * (plus the text-size and square-size settings via --board-text-scale and
+ * --board-cell-ratio). Thick lines come from the grid gap over --board-line.
+ */
+:root {
+  --whiteboard-bg: #fcfcfa;
+}
+
+.board {
+  --board-bg: var(--whiteboard-bg);
+  --board-ink: #1c2126;
+  --board-line: #1c2126;
+  --board-muted: #868d94;
+  --board-surface: #eceeef;
+  --board-highlight: #ffe68a;
+  --board-danger: #b42318;
+  --board-font: var(--font-marker), "Marker Felt", "Comic Sans MS", system-ui, sans-serif;
+  --board-gap: 2px;
+  --board-cell-ratio: 1;
+  --board-text-scale: 1;
+  background: var(--board-bg);
+  color: var(--board-ink);
+  font-family: var(--board-font);
+}
+
+/* Overscroll / safe areas show the board, not paper, while the board is up. */
+html:has(.board),
+body:has(.board) {
+  background: var(--whiteboard-bg);
+}
+
+@theme inline {
+  --color-board-bg: var(--board-bg);
+  --color-board-ink: var(--board-ink);
+  --color-board-line: var(--board-line);
+  --color-board-muted: var(--board-muted);
+  --color-board-surface: var(--board-surface);
+  --color-board-highlight: var(--board-highlight);
+  --color-board-danger: var(--board-danger);
+}
+
+@utility font-board {
+  font-family: var(--board-font);
+}
+
+/* 5×5, always exactly the available width: minmax(0, 1fr) columns, ≤2px gaps. */
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--board-gap);
+  padding: var(--board-gap);
+  width: 100%;
+  min-width: 0;
+  background: var(--board-line);
+  border-radius: 7px 4px 6px 5px;
+}
+
+.board-cell {
+  position: relative;
+  min-width: 0;
+  aspect-ratio: var(--board-cell-ratio);
+  overflow: hidden;
+  background: var(--board-bg);
+  container-type: inline-size;
+}
+.board-cell:first-child {
+  border-top-left-radius: 5px;
+}
+.board-cell:nth-child(5) {
+  border-top-right-radius: 3px;
+}
+.board-cell:nth-child(21) {
+  border-bottom-left-radius: 4px;
+}
+.board-cell:last-child {
+  border-bottom-right-radius: 4px;
+}
+
+/* Labels scale with the cell (container query units), clamped to a few lines. */
+.board-label {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--label-lines);
+  line-clamp: var(--label-lines);
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+  text-align: center;
+  font-size: calc(var(--label-cqi) * var(--board-text-scale));
+  line-height: 1.08;
+}
+.board-label[data-size="xl"] {
+  --label-cqi: 19cqi;
+  --label-lines: 2;
+}
+.board-label[data-size="lg"] {
+  --label-cqi: 16cqi;
+  --label-lines: 3;
+}
+.board-label[data-size="md"] {
+  --label-cqi: 14cqi;
+  --label-lines: 4;
+}
+.board-label[data-size="sm"] {
+  --label-cqi: 12cqi;
+  --label-lines: 5;
+}
+.board-label[data-done="true"] {
+  color: var(--board-muted);
+}
+
+.board-count {
+  position: absolute;
+  top: 3cqi;
+  right: 5cqi;
+  font-size: calc(12cqi * var(--board-text-scale));
+  line-height: 1;
+  color: var(--board-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-badge {
+  position: absolute;
+  right: 4cqi;
+  bottom: 4cqi;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 25cqi;
+  height: 25cqi;
+  font-size: 15cqi;
+  line-height: 1;
+  border-radius: 48% 52% 45% 55% / 55% 45% 52% 48%;
+}
+
+/* Cross-off scribble: strokes drawn with stroke-dashoffset (pathLength = 1). */
+.scribble path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+.scribble[data-animate="true"] path {
+  animation: scribble-draw 280ms cubic-bezier(0.45, 0.05, 0.35, 1) both;
+}
+@keyframes scribble-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes board-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* A new bingo line pulses before the overlay. */
+.board-cell[data-celebrate="true"] {
+  z-index: 1;
+  background: var(--board-highlight);
+  animation: board-cell-pulse 800ms ease-in-out both;
+}
+@keyframes board-cell-pulse {
+  0% {
+    transform: scale(1);
+  }
+  30% {
+    transform: scale(1.07);
+  }
+  60% {
+    transform: scale(0.98);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Reduced motion: no drawing, a short fade instead (overrides the global kill switch). */
+@media (prefers-reduced-motion: reduce) {
+  .scribble[data-animate="true"] path {
+    animation: none !important;
+  }
+  .scribble[data-animate="true"] {
+    animation: board-fade-in 200ms ease-out both !important;
+  }
+}

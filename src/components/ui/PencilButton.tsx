@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { ButtonHTMLAttributes, ComponentProps, ReactNode } from "react";
+import type { ButtonHTMLAttributes, ComponentProps, ReactNode, Ref } from "react";
 
 type Variant = "primary" | "secondary" | "quiet";
 
@@ -22,6 +22,7 @@ export function pencilButtonClass(variant: Variant = "primary", className = ""):
 }
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  ref?: Ref<HTMLButtonElement>;
   variant?: Variant;
   /** Shows the pressed/working state and blocks clicks without changing layout. */
   busy?: boolean;
