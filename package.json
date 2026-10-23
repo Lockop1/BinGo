@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
+    "e2e": "playwright test",
     "db:test": "bash scripts/db-test.sh",
     "backend:reset": "node scripts/local-backend/cli.mjs reset",
     "backend:migrate": "node scripts/local-backend/cli.mjs migrate",
@@ -27,14 +29,16 @@
     "server-only": "^0.0.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@tailwindcss/turbopack": "^4",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
     "supabase": "^2.122.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^5.0.5"
   }
 }

@@ -49,3 +49,7 @@ next-env.d.ts
 # local backend harness: downloaded binaries and runtime state (scripts/local-backend)
 scripts/local-backend/.bin/
 scripts/local-backend/.run/
+
+# Playwright
+/test-results/
+/playwright-report/

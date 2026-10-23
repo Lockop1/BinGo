@@ -1,18 +1,28 @@
+import type { Metadata } from "next";
 import { Suspense } from "react";
+import { JoinScreen } from "@/components/join/JoinScreen";
+import { PaperPage } from "@/components/paper/PaperPage";
+import { SessionGate } from "@/components/providers/SessionGate";
+import { SkeletonLines } from "@/components/ui/Skeleton";
 
-// Join route: /g/[code]. Placeholder until Phase 2 (join flow).
+export const metadata: Metadata = { title: "Join game · Bingo Night" };
+
+// Join route: /g/[code]. Everything below the params read is client-side.
 export default function JoinPage({ params }: PageProps<"/g/[code]">) {
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-2 px-4">
-      <h1 className="text-2xl font-semibold">Join game</h1>
-      <Suspense fallback={null}>
+    <PaperPage back>
+      <Suspense fallback={<SkeletonLines lines={3} label="Loading game" />}>
         <JoinCode params={params} />
       </Suspense>
-    </main>
+    </PaperPage>
   );
 }
 
 async function JoinCode({ params }: Pick<PageProps<"/g/[code]">, "params">) {
   const { code } = await params;
-  return <p className="font-mono text-sm opacity-70">{code}</p>;
+  return (
+    <SessionGate>
+      <JoinScreen rawCode={code} />
+    </SessionGate>
+  );
 }

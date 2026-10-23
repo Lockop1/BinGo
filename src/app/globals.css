@@ -1,25 +1,152 @@
 @import "tailwindcss";
 
+/*
+ * Theme tokens. Paper (lobby / home / create / join) is the default look;
+ * the Whiteboard and Scoreboard board themes arrive in Phase 5.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --paper: #fbf8ef;
+  --paper-rule: #b5d0ea;
+  --paper-margin: #e98b8f;
+  --ink: #2f3337;
+  --ink-soft: #62676c;
+  --ink-faint: #c4c5c1;
+  --highlight: #ffe68a;
+  --danger: #b42318;
+  --rule-gap: 28px;
+  --margin-x: 40px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    /* Dim paper under a lamp, not black. */
+    --paper: #33302a;
+    --paper-rule: #46586e;
+    --paper-margin: #7f4247;
+    --ink: #ebe6da;
+    --ink-soft: #b7b0a2;
+    --ink-faint: #5c584f;
+    --highlight: #6a5a1c;
+    --danger: #ff8f84;
   }
 }
 
+@theme inline {
+  --color-paper: var(--paper);
+  --color-paper-rule: var(--paper-rule);
+  --color-paper-margin: var(--paper-margin);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+  --color-highlight: var(--highlight);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-pencil), "Comic Sans MS", "Chalkboard SE", ui-rounded, system-ui, sans-serif;
+}
+
+/* Font utilities (next/font sets the variables on <html> in layout.tsx). */
+@utility font-pencil {
+  font-family: var(--font-pencil), "Comic Sans MS", "Chalkboard SE", ui-rounded, system-ui, sans-serif;
+}
+@utility font-marker {
+  font-family: var(--font-marker), "Marker Felt", "Comic Sans MS", system-ui, sans-serif;
+}
+@utility font-scoreboard {
+  font-family: var(--font-scoreboard), Impact, "Arial Narrow", system-ui, sans-serif;
+  letter-spacing: 0.02em;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  background: var(--paper);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--paper);
+  color: var(--ink);
   font-family: var(--font-sans);
+  overflow-x: hidden;
+}
+
+/*
+ * Lined loose-leaf paper: light-blue rules every --rule-gap, a red margin line,
+ * warm off-white (or dim, in dark mode) background. Hard color stops only.
+ */
+@utility paper {
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(
+      to right,
+      transparent var(--margin-x),
+      var(--paper-margin) var(--margin-x),
+      var(--paper-margin) calc(var(--margin-x) + 2px),
+      transparent calc(var(--margin-x) + 2px)
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent calc(var(--rule-gap) - 1px),
+      var(--paper-rule) calc(var(--rule-gap) - 1px),
+      var(--paper-rule) var(--rule-gap)
+    );
+  background-attachment: local;
+  background-position: 0 0, 0 72px;
+  background-repeat: no-repeat, repeat;
+}
+
+/* Hand-drawn outline: uneven radii read as a pencil stroke. */
+@utility pencil-border {
+  border: 2px solid var(--ink);
+  border-radius: 255px 18px 225px 18px / 18px 225px 18px 255px;
+}
+
+@utility pencil-border-alt {
+  border: 2px solid var(--ink);
+  border-radius: 18px 225px 18px 255px / 255px 18px 225px 18px;
+}
+
+/* Paper index card (pack picker, list rows). */
+@utility index-card {
+  background-color: var(--paper);
+  background-image: linear-gradient(
+      to bottom,
+      transparent 34px,
+      var(--paper-margin) 34px,
+      var(--paper-margin) 35px,
+      transparent 35px
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 21px,
+      var(--paper-rule) 21px,
+      var(--paper-rule) 22px
+    );
+  background-position: 0 0, 0 35px;
+  background-repeat: no-repeat, repeat;
+  border: 1.5px solid var(--ink-soft);
+  border-radius: 3px 6px 4px 7px;
+  box-shadow: 1px 2px 0 var(--ink-faint);
+}
+
+/* Player color swatch: light shade on light paper, dark-theme shade on dim paper. */
+.swatch {
+  background-color: var(--swatch-light);
+  color: var(--swatch-light-ink);
+}
+@media (prefers-color-scheme: dark) {
+  .swatch {
+    background-color: var(--swatch-dark);
+    color: var(--swatch-dark-ink);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
