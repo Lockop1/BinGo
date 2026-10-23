@@ -73,4 +73,4 @@ Items below are filled in by the build as phases land.
 
 - [x] Phase 1 migrations ready to push (`supabase/migrations/2026102320425{4,6,8}_*.sql`)
 - [x] Cron route + `vercel.json` ready (daily 09:17 UTC; set `CRON_SECRET` in Vercel)
-- [ ] Deploy checklist reviewed
+- [x] Deploy checklist written: see `DEPLOY.md`
