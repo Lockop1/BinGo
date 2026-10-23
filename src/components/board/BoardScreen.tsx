@@ -21,9 +21,8 @@ import type { Game, Player, Square } from "@/lib/game/types";
 import { useBoardState } from "@/lib/game/useBoardState";
 import type { SyncState } from "@/lib/game/useGame";
 import { doublePulse, pulse } from "@/lib/haptics";
-import type { PaletteTheme } from "@/lib/palette";
-
-export type BoardTheme = "whiteboard";
+import { paletteThemeFor, type BoardTheme } from "@/lib/settings/settings";
+import { useSettings } from "@/lib/settings/useSettings";
 
 export type BoardScreenProps = {
   game: Game;
@@ -34,15 +33,25 @@ export type BoardScreenProps = {
   refresh: () => Promise<void>;
   applyGame: (row: Game) => void;
   applySquare: (row: Square) => void;
-  /** Phase 5 plugs the real settings in; without it the gear opens a placeholder sheet. */
-  onOpenSettings?: () => void;
-  /** Board theme (Phase 5 adds "scoreboard"). */
-  theme?: BoardTheme;
 };
 
 type SheetState = { kind: "square"; position: number } | { kind: "players" } | { kind: "settings" };
 
-const PALETTE_THEME: Record<BoardTheme, PaletteTheme> = { whiteboard: "light" };
+/** Browser chrome color per theme (matches --whiteboard-bg / --scoreboard-bg in globals.css). */
+const THEME_COLOR: Record<BoardTheme, string> = { whiteboard: "#ffffff", scoreboard: "#0b0b0d" };
+
+/**
+ * While the board is up, the browser's toolbar matches it instead of the
+ * paper (layout.tsx's per-scheme theme-color metas); restored on the way out.
+ */
+function useThemeColor(color: string) {
+  useEffect(() => {
+    const metas = Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'));
+    const saved = metas.map((meta) => meta.content);
+    for (const meta of metas) meta.content = color;
+    return () => metas.forEach((meta, i) => (meta.content = saved[i]));
+  }, [color]);
+}
 
 /** "7 of 25 crossed off · 1 bingo" under the grid. */
 function progressLine(board: DisplaySquare[]): string {
@@ -94,10 +103,10 @@ export function BoardScreen({
   refresh,
   applyGame,
   applySquare,
-  onOpenSettings,
-  theme = "whiteboard",
 }: BoardScreenProps) {
-  const paletteTheme = PALETTE_THEME[theme];
+  const { settings, theme, systemTheme, update: updateSettings } = useSettings();
+  const paletteTheme = paletteThemeFor(theme);
+  useThemeColor(THEME_COLOR[theme]);
   const isHost = me !== null && me.user_id === game.host_user_id;
   const host = useMemo(() => players.find((p) => p.user_id === game.host_user_id) ?? null, [players, game.host_user_id]);
 
@@ -196,6 +205,8 @@ export function BoardScreen({
     <main
       className="board flex min-h-dvh w-full min-w-0 flex-1 flex-col overflow-x-hidden"
       data-theme={theme}
+      data-text-size={settings.textSize}
+      data-square-size={settings.squareSize}
       data-testid="game-screen"
       data-status="active"
       data-celebrations={celebration.shown}
@@ -207,7 +218,7 @@ export function BoardScreen({
         syncState={syncState}
         pendingCount={boardState.pendingCount}
         onPlayers={() => openSheet({ kind: "players" })}
-        onSettings={() => (onOpenSettings ? onOpenSettings() : openSheet({ kind: "settings" }))}
+        onSettings={() => openSheet({ kind: "settings" })}
         onRetry={() => {
           boardState.retry();
           void refresh();
@@ -215,12 +226,10 @@ export function BoardScreen({
       />
 
       <div className="flex min-w-0 flex-1 flex-col items-center pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.375rem,env(safe-area-inset-left))] pr-[max(0.375rem,env(safe-area-inset-right))] pt-2">
-        {/* data-testid kept for e2e/lobby.spec.ts, which checks that Start lands on the live board. */}
         <section
           className="w-full min-w-0"
           // Full width on phones; on wide or landscape screens no taller than the viewport.
           style={{ maxWidth: "min(36rem, max(18rem, calc(100dvh - 5.5rem)))" }}
-          data-testid="active-placeholder"
           aria-label={`${game.name} board`}
         >
           <BoardGrid
@@ -258,6 +267,7 @@ export function BoardScreen({
             players={players}
             me={me}
             isHost={isHost}
+            theme={paletteTheme}
             outcome={boardState.outcomeFor(selected.position)}
             syncState={syncState}
             onComplete={() => {
@@ -277,6 +287,7 @@ export function BoardScreen({
           board={board}
           meId={meId}
           isHost={isHost}
+          theme={paletteTheme}
           ending={ending}
           error={endError}
           onEndGame={() => void endTheGame()}
@@ -284,7 +295,13 @@ export function BoardScreen({
       </Sheet>
 
       <Sheet open={sheetOpen && sheet?.kind === "settings"} onClose={closeSheet} title="Settings" testId="settings-sheet">
-        <SettingsSheetBody game={game} />
+        <SettingsSheetBody
+          game={game}
+          settings={settings}
+          theme={theme}
+          systemTheme={systemTheme}
+          onChange={updateSettings}
+        />
       </Sheet>
     </main>
   );

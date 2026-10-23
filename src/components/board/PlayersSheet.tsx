@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { PlayerSwatch } from "@/components/game/PlayerSwatch";
+import { BoardSwatch } from "@/components/board/BoardSwatch";
 import { PencilButton } from "@/components/ui/PencilButton";
 import type { DisplaySquare } from "@/lib/game/boardState";
 import { MAX_PLAYERS, type Game, type Player } from "@/lib/game/types";
+import type { PaletteTheme } from "@/lib/palette";
 
 const autoEndFormat = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 
@@ -26,6 +27,7 @@ export function PlayersSheetBody({
   board,
   meId,
   isHost,
+  theme,
   ending,
   error,
   onEndGame,
@@ -35,6 +37,8 @@ export function PlayersSheetBody({
   board: DisplaySquare[];
   meId: string | null;
   isHost: boolean;
+  /** Player-color shade for the board's theme. */
+  theme: PaletteTheme;
   ending: boolean;
   error: string | null;
   onEndGame: () => void;
@@ -57,7 +61,7 @@ export function PlayersSheetBody({
           const n = counts.get(p.id) ?? 0;
           return (
             <li key={p.id} data-testid="board-player" data-color={p.color} className="flex min-h-11 min-w-0 items-center gap-3">
-              <PlayerSwatch color={p.color} />
+              <BoardSwatch color={p.color} theme={theme} />
               <span className="flex min-w-0 flex-1 items-center gap-2">
                 <span className="min-w-0 truncate text-xl">{p.display_name}</span>
                 {p.user_id === game.host_user_id ? <Tag>host</Tag> : null}

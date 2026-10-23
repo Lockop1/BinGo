@@ -139,7 +139,7 @@ test("host and friend edit the board live, ready up and start", async ({ browser
   for (const page of [host, friend]) {
     await expect(page.getByTestId("game-screen")).toHaveAttribute("data-status", "active", LIVE);
     await expect(page.getByTestId("lobby")).toHaveCount(0);
-    await expect(page.getByTestId("active-placeholder")).toBeVisible();
+    await expect(page.getByTestId("board-grid")).toBeVisible();
   }
 
   await hostContext.close();

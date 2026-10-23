@@ -4,6 +4,8 @@
  * `null` and writes are silently dropped.
  */
 
+import type { StoredSettings } from "@/lib/settings/settings";
+
 export type ActiveGameRecord = {
   gameId: string;
   /** ISO timestamp of when this phone last opened the game. */
@@ -14,6 +16,8 @@ type LocalSchema = {
   "bingo.displayName": string;
   /** Placeholder for Phase 7 (instant return to the active board). */
   "bingo.activeGame": ActiveGameRecord;
+  /** Board settings for this phone (validated field by field on read, see lib/settings). */
+  "bingo.settings": StoredSettings;
 } & {
   /** Bingo line ids (and "blackout") this phone has already celebrated for a game. */
   [key: `bingo.celebrated.${string}`]: string[];

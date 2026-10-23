@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { Scribble } from "@/components/board/Scribble";
 import type { DisplaySquare } from "@/lib/game/boardState";
 import { boardLabelSize, initialOf } from "@/lib/game/boardText";
@@ -9,9 +9,32 @@ import { playerColor, type PaletteTheme } from "@/lib/palette";
 
 const versionKey = (s: Pick<DisplaySquare, "position" | "completed_at">) => `${s.position}:${s.completed_at}`;
 
+/** Cell boundaries at 0%, 20% … 100%: 6 horizontal and 6 vertical lines. */
+const LINE_STOPS = ["0%", "20%", "40%", "60%", "80%", "100%"];
+
+/**
+ * The grid lines, drawn over the cell boundaries in px units (percentage
+ * coordinates, no viewBox) so stroke width and the scoreboard's lamp spacing
+ * stay in screen pixels at every cell ratio. Look comes from the theme tokens
+ * (--board-line, --board-line-width, --board-line-dash in globals.css).
+ */
+export function BoardLines() {
+  return (
+    <svg aria-hidden className="board-lines" data-testid="board-lines">
+      {LINE_STOPS.map((at, i) => (
+        <line key={`h${i}`} x1="0%" x2="100%" y1={at} y2={at} />
+      ))}
+      {LINE_STOPS.map((at, i) => (
+        <line key={`v${i}`} x1={at} x2={at} y1="0%" y2="100%" />
+      ))}
+    </svg>
+  );
+}
+
 /**
  * The live 5×5 grid. Always exactly the available width (no horizontal
- * scroll at any size); cells are square by default (--board-cell-ratio).
+ * scroll at any setting): minmax(0, 1fr) columns, cell height from
+ * --board-cell-ratio, label size from --board-text-scale.
  */
 export function BoardGrid({
   board,
@@ -34,24 +57,27 @@ export function BoardGrid({
   const lit = useMemo(() => new Set(highlight), [highlight]);
 
   return (
-    <ol className="board-grid" data-testid="board-grid" aria-label="Board">
-      {Array.from({ length: BOARD_SIZE }, (_, position) => {
-        const square = byPosition.get(position);
-        return (
-          <li key={position} className="board-cell" data-celebrate={lit.has(position) || undefined}>
-            {square ? (
-              <BoardCell
-                square={square}
-                completer={square.completed_by_player_id ? (byId.get(square.completed_by_player_id) ?? null) : null}
-                theme={theme}
-                animate={square.pending || !initial.has(versionKey(square))}
-                onSelect={onSelect}
-              />
-            ) : null}
-          </li>
-        );
-      })}
-    </ol>
+    <div className="board-frame" data-testid="board-grid">
+      <ol className="board-grid" aria-label="Board">
+        {Array.from({ length: BOARD_SIZE }, (_, position) => {
+          const square = byPosition.get(position);
+          return (
+            <li key={position} className="board-cell" data-celebrate={lit.has(position) || undefined}>
+              {square ? (
+                <BoardCell
+                  square={square}
+                  completer={square.completed_by_player_id ? (byId.get(square.completed_by_player_id) ?? null) : null}
+                  theme={theme}
+                  animate={square.pending || !initial.has(versionKey(square))}
+                  onSelect={onSelect}
+                />
+              ) : null}
+            </li>
+          );
+        })}
+      </ol>
+      <BoardLines />
+    </div>
   );
 }
 
@@ -97,7 +123,8 @@ function BoardCell({
       data-free={square.free || undefined}
       data-count={counter ? `${square.current_count}/${square.target_count}` : undefined}
       aria-label={name}
-      className="relative flex size-full min-w-0 flex-col items-center justify-center overflow-hidden px-[5cqi] py-[7cqi] text-board-ink focus-visible:outline-[3px] focus-visible:-outline-offset-[3px] focus-visible:outline-board-ink active:bg-board-surface"
+      style={swatch ? ({ "--cell-color": swatch.fill } as CSSProperties) : undefined}
+      className="relative flex size-full min-w-0 flex-col items-center justify-center overflow-hidden px-[5cqi] py-[7cqi] text-board-ink focus-visible:outline-[3px] focus-visible:-outline-offset-[3px] focus-visible:outline-board-ink"
     >
       {label ? (
         <span

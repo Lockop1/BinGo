@@ -1,7 +1,7 @@
 "use client";
 
 import { Camera, Share2, Undo2 } from "lucide-react";
-import { PlayerSwatch } from "@/components/game/PlayerSwatch";
+import { BoardSwatch } from "@/components/board/BoardSwatch";
 import { HoldButton } from "@/components/ui/HoldButton";
 import { PencilButton } from "@/components/ui/PencilButton";
 import type { DisplaySquare } from "@/lib/game/boardState";
@@ -9,6 +9,7 @@ import { GAME_ERROR_COPY } from "@/lib/game/errors";
 import type { Settled } from "@/lib/game/pendingActions";
 import type { Player } from "@/lib/game/types";
 import type { SyncState } from "@/lib/game/useGame";
+import type { PaletteTheme } from "@/lib/palette";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
 
@@ -29,6 +30,7 @@ export function SquareSheetBody({
   players,
   me,
   isHost,
+  theme,
   outcome,
   syncState,
   onComplete,
@@ -39,6 +41,8 @@ export function SquareSheetBody({
   players: Player[];
   me: Player | null;
   isHost: boolean;
+  /** Player-color shade for the board's theme. */
+  theme: PaletteTheme;
   outcome: Settled | undefined;
   syncState: SyncState;
   onComplete: () => void;
@@ -88,7 +92,7 @@ export function SquareSheetBody({
           <span className="text-ink-soft">On the house: crossed off from the start.</span>
         ) : done ? (
           <>
-            {completer ? <PlayerSwatch color={completer.color} className="size-5" /> : null}
+            {completer ? <BoardSwatch color={completer.color} theme={theme} className="size-5" /> : null}
             <span className="min-w-0 break-words">
               Crossed off by {mine ? "you" : (completer?.display_name ?? "someone")}
               {square.completed_at ? ` at ${timeFormat.format(new Date(square.completed_at))}` : ""}

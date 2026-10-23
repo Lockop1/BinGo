@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { LIVE, expectFitsWidth, twoPhonesInActiveGame } from "./helpers";
 
 /**
  * The live board on two phones (Night Out pack, free center on). The local
@@ -12,15 +13,9 @@ import { expect, test, type Page } from "@playwright/test";
  * is the diagonal 0-6-12-18-24 (row 0 contains the counter square).
  */
 
-const LIVE = { timeout: 3_000 };
-
 async function expectNoHorizontalScroll(page: Page, width: number) {
-  const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
-  expect(scrollWidth, `scrollWidth at ${width}px on ${page.url()}`).toBeLessThanOrEqual(width);
-  const grid = await page.getByTestId("board-grid").boundingBox();
-  expect(grid, "board grid").not.toBeNull();
-  expect(grid!.x).toBeGreaterThanOrEqual(0);
-  expect(grid!.x + grid!.width).toBeLessThanOrEqual(width + 0.5);
+  expect(page.viewportSize()?.width).toBe(width);
+  await expectFitsWidth(page, `at ${width}px`);
   // Square cells by default.
   const cell = (await page.getByTestId("cell-7").boundingBox())!;
   expect(Math.abs(cell.width - cell.height)).toBeLessThan(1.5);
@@ -78,37 +73,8 @@ async function expectCelebrationOnBoth(a: Page, b: Page) {
 
 test("live board: cross-off, toasts, bingo once, undo, counters, offline, end game", async ({ browser }) => {
   test.setTimeout(150_000);
-  const gameName = `E2E Board ${Date.now().toString(36)}`;
-  const hostContext = await browser.newContext();
-  const friendContext = await browser.newContext();
-  const host = await hostContext.newPage();
-  const friend = await friendContext.newPage();
-
-  // --- Lobby: Night Out pack, both ready, start.
-  await host.goto("/new");
-  await host.waitForLoadState("networkidle");
-  const create = host.getByTestId("create-game");
-  await expect(async () => {
-    await host.getByTestId("game-name").fill(gameName);
-    await host.getByTestId("host-name").fill("Hosty");
-    await expect(create).toBeEnabled({ timeout: 1_000 });
-  }).toPass();
-  await host.getByTestId("pack-night-out").click();
-  await create.click();
-  await expect(host).toHaveURL(/\/game\/[0-9a-f-]{36}$/);
-  const gameId = new URL(host.url()).pathname.split("/").pop()!;
-  const code = (await host.getByTestId("invite-code").getAttribute("data-code"))!;
-
-  await friend.goto(`/g/${code}`);
-  await friend.getByTestId("join-name").fill("Friendo");
-  await friend.getByTestId("join-game").click();
-  await expect(friend.getByTestId("lobby")).toBeVisible();
-  await expect(host.getByTestId("player")).toHaveCount(2, LIVE);
-
-  await host.getByTestId("ready-toggle").click();
-  await friend.getByTestId("ready-toggle").click();
-  await expect(host.getByTestId("start-game")).toBeEnabled(LIVE);
-  await host.getByTestId("start-game").click();
+  // --- Lobby: Night Out pack, both ready, start (e2e/helpers.ts).
+  const { host, friend, friendContext, gameName, gameId, close } = await twoPhonesInActiveGame(browser);
 
   // --- Both phones see the board; it owns the screen and fits 375 and 320.
   for (const page of [host, friend]) {
@@ -269,6 +235,5 @@ test("live board: cross-off, toasts, bingo once, undo, counters, offline, end ga
     await expect(page.getByTestId("board-grid")).toHaveCount(0);
   }
 
-  await hostContext.close();
-  await friendContext.close();
+  await close();
 });

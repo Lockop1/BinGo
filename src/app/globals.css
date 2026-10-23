@@ -225,37 +225,133 @@ body {
 }
 
 /* ------------------------------------------------------------------------
- * Live board (Phase 4). Theme plumbing: every board color and the font are
- * custom properties on the `.board` root. These are provisional Whiteboard
- * values; Phase 5 adds Dark Scoreboard as `.board[data-theme="scoreboard"]`
- * (plus the text-size and square-size settings via --board-text-scale and
- * --board-cell-ratio). Thick lines come from the grid gap over --board-line.
+ * Live board (Phases 4–5). Every board color, the font, the grid lines and
+ * the two size settings are custom properties on the `.board` root, set per
+ * `data-theme` / `data-text-size` / `data-square-size` (BoardScreen sets
+ * them from lib/settings). `.board-tokens` lets the start transition borrow
+ * the same tokens without the page-level `.board` rules below.
  */
 :root {
-  --whiteboard-bg: #fcfcfa;
+  --whiteboard-bg: #ffffff;
+  --scoreboard-bg: #0b0b0d;
 }
 
-.board {
+/* Whiteboard: clean white, marker type, thick near-black marker lines. Also the fallback. */
+:where(.board, .board-tokens) {
   --board-bg: var(--whiteboard-bg);
-  --board-ink: #1c2126;
-  --board-line: #1c2126;
-  --board-muted: #868d94;
+  --board-ink: #15181b;
+  --board-label: #15181b;
+  --board-label-done: #575d64;
+  --board-line: #15181b;
+  --board-line-width: 3.5px;
+  --board-line-dash: none;
+  --board-muted: #575d64;
   --board-surface: #eceeef;
   --board-highlight: #ffe68a;
   --board-danger: #b42318;
   --board-font: var(--font-marker), "Marker Felt", "Comic Sans MS", system-ui, sans-serif;
-  --board-gap: 2px;
+  --board-tracking: 0;
+  /* Type-size and line-height tweak per face (condensed Bebas reads small at the same em). */
+  --board-font-scale: 1;
+  --board-leading: 1.08;
+  /* How much of the completer's color fills a crossed-off square (none on the whiteboard). */
+  --board-lit: 0%;
   --board-cell-ratio: 1;
   --board-text-scale: 1;
+}
+
+/*
+ * Dark Scoreboard: near-black, condensed Bebas Neue with tracking, grid lines
+ * as rows of round amber lamps (zero-length dashes with round caps, no glow),
+ * crossed-off squares light up in the completer's color.
+ */
+:where(.board, .board-tokens)[data-theme="scoreboard"] {
+  --board-bg: var(--scoreboard-bg);
+  --board-ink: #fbf6ea;
+  --board-label: #bdb6a6;
+  --board-label-done: #fffaf0;
+  --board-line: #f2b33d;
+  --board-line-width: 3.5px;
+  --board-line-dash: 0 8.5px;
+  --board-muted: #b1ab9e;
+  --board-surface: #1f1f24;
+  --board-highlight: #4d3d0c;
+  --board-danger: #ff8f84;
+  --board-font: var(--font-scoreboard), Impact, "Arial Narrow", system-ui, sans-serif;
+  --board-tracking: 0.05em;
+  --board-font-scale: 1.15;
+  --board-leading: 1;
+  --board-lit: 24%;
+}
+
+/* Settings: label scale 1 / 1.2 / 1.45, cell height ÷ width 1 / 1.35 (lib/settings mirrors these). */
+:where(.board, .board-tokens)[data-text-size="large"] {
+  --board-text-scale: 1.2;
+}
+:where(.board, .board-tokens)[data-text-size="xlarge"] {
+  --board-text-scale: 1.45;
+}
+:where(.board, .board-tokens)[data-square-size="tall"] {
+  --board-cell-ratio: 1.35;
+}
+
+.board {
   background: var(--board-bg);
   color: var(--board-ink);
   font-family: var(--board-font);
+}
+.board[data-theme="scoreboard"] {
+  color-scheme: dark;
+}
+.board[data-theme="whiteboard"] {
+  color-scheme: light;
 }
 
 /* Overscroll / safe areas show the board, not paper, while the board is up. */
 html:has(.board),
 body:has(.board) {
   background: var(--whiteboard-bg);
+}
+html:has(.board[data-theme="scoreboard"]),
+body:has(.board[data-theme="scoreboard"]) {
+  background: var(--scoreboard-bg);
+  color-scheme: dark;
+}
+
+/*
+ * The board's sheets (square, players, settings, blackout) are paper sheets
+ * portalled to <body>. While the board is up their paper follows the board
+ * theme instead of the phone's color scheme: light paper over the
+ * Whiteboard, a near-black pad over the Scoreboard. (The lobby is never on
+ * screen at the same time, so it keeps following the phone.)
+ */
+html:has(.board[data-theme="whiteboard"]) {
+  --paper: #fbf8ef;
+  --paper-rule: #b5d0ea;
+  --paper-margin: #e98b8f;
+  --ink: #2f3337;
+  --ink-soft: #5c6166;
+  --ink-faint: #c4c5c1;
+  --highlight: #ffe68a;
+  --danger: #b42318;
+}
+html:has(.board[data-theme="scoreboard"]) {
+  --paper: #18181c;
+  --paper-rule: #2b2e37;
+  --paper-margin: #5e2b30;
+  --ink: #f2ecdf;
+  --ink-soft: #b3ad9f;
+  --ink-faint: #4a4741;
+  --highlight: #6a5a1c;
+  --danger: #ff8f84;
+}
+/*
+ * The sheet backdrop is `bg-ink/35` (components/ui/Sheet.tsx): a dark veil on
+ * paper, but a grey wash over the near-black Scoreboard, whose sheet ink is
+ * light. Dim it with black instead while the Scoreboard is up.
+ */
+html:has(.board[data-theme="scoreboard"]) .bg-ink\/35 {
+  background-color: rgb(0 0 0 / 0.55);
 }
 
 @theme inline {
@@ -270,39 +366,61 @@ body:has(.board) {
 
 @utility font-board {
   font-family: var(--board-font);
+  letter-spacing: var(--board-tracking);
 }
 
-/* 5×5, always exactly the available width: minmax(0, 1fr) columns, ≤2px gaps. */
+/*
+ * 5×5, always exactly the available width: minmax(0, 1fr) columns, no gaps.
+ * The lines are an SVG drawn over the cell boundaries (see BoardLines), so
+ * marker lines get round ends and scoreboard lines become lamps. The frame's
+ * padding keeps the outer lines' half-width inside the box.
+ */
+.board-frame {
+  --board-frame-pad: calc(var(--board-line-width) / 2 + 1px);
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  padding: var(--board-frame-pad);
+}
+
 .board-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: var(--board-gap);
-  padding: var(--board-gap);
   width: 100%;
   min-width: 0;
-  background: var(--board-line);
-  border-radius: 7px 4px 6px 5px;
+}
+
+.board-lines {
+  position: absolute;
+  top: var(--board-frame-pad);
+  left: var(--board-frame-pad);
+  width: calc(100% - 2 * var(--board-frame-pad));
+  height: calc(100% - 2 * var(--board-frame-pad));
+  overflow: visible;
+  pointer-events: none;
+  z-index: 2;
+}
+.board-lines line {
+  stroke: var(--board-line);
+  stroke-width: var(--board-line-width);
+  stroke-linecap: round;
+  stroke-dasharray: var(--board-line-dash);
 }
 
 .board-cell {
   position: relative;
   min-width: 0;
-  aspect-ratio: var(--board-cell-ratio);
+  aspect-ratio: 1 / var(--board-cell-ratio);
   overflow: hidden;
-  background: var(--board-bg);
   container-type: inline-size;
 }
-.board-cell:first-child {
-  border-top-left-radius: 5px;
+
+/* Crossed-off squares light up in the completer's color (--cell-color, set inline). */
+.board-cell > button[data-completed="true"] {
+  background-color: color-mix(in srgb, var(--cell-color, transparent) var(--board-lit), transparent);
 }
-.board-cell:nth-child(5) {
-  border-top-right-radius: 3px;
-}
-.board-cell:nth-child(21) {
-  border-bottom-left-radius: 4px;
-}
-.board-cell:last-child {
-  border-bottom-right-radius: 4px;
+.board-cell > button:active {
+  background-color: var(--board-surface);
 }
 
 /* Labels scale with the cell (container query units), clamped to a few lines. */
@@ -315,16 +433,18 @@ body:has(.board) {
   overflow-wrap: anywhere;
   hyphens: auto;
   text-align: center;
-  font-size: calc(var(--label-cqi) * var(--board-text-scale));
-  line-height: 1.08;
+  font-size: calc(var(--label-cqi) * var(--board-text-scale) * var(--board-font-scale));
+  line-height: var(--board-leading);
+  letter-spacing: var(--board-tracking);
+  color: var(--board-label);
 }
 .board-label[data-size="xl"] {
   --label-cqi: 19cqi;
   --label-lines: 2;
 }
 .board-label[data-size="lg"] {
-  --label-cqi: 16cqi;
   --label-lines: 3;
+  --label-cqi: 16cqi;
 }
 .board-label[data-size="md"] {
   --label-cqi: 14cqi;
@@ -334,8 +454,31 @@ body:has(.board) {
   --label-cqi: 12cqi;
   --label-lines: 5;
 }
+/*
+ * Line budgets per setting so the clamp ends inside the cell: a cell has
+ * ~86cqi of text height (square) or ~121cqi (tall) after padding; extra-large
+ * type fits one line fewer of the two smallest steps, tall cells fit more.
+ */
+:where(.board, .board-tokens)[data-text-size="xlarge"] .board-label[data-size="md"] {
+  --label-lines: 3;
+}
+:where(.board, .board-tokens)[data-text-size="xlarge"] .board-label[data-size="sm"] {
+  --label-lines: 4;
+}
+:where(.board, .board-tokens)[data-square-size="tall"] .board-label[data-size="xl"] {
+  --label-lines: 3;
+}
+:where(.board, .board-tokens)[data-square-size="tall"] .board-label[data-size="lg"] {
+  --label-lines: 4;
+}
+:where(.board, .board-tokens)[data-square-size="tall"] .board-label[data-size="md"] {
+  --label-lines: 5;
+}
+:where(.board, .board-tokens)[data-square-size="tall"] .board-label[data-size="sm"] {
+  --label-lines: 6;
+}
 .board-label[data-done="true"] {
-  color: var(--board-muted);
+  color: var(--board-label-done);
 }
 
 .board-count {
@@ -360,6 +503,10 @@ body:has(.board) {
   font-size: 15cqi;
   line-height: 1;
   border-radius: 48% 52% 45% 55% / 55% 45% 52% 48%;
+}
+.board[data-theme="scoreboard"] .board-badge {
+  font-size: 17cqi;
+  border-radius: 3px;
 }
 
 /* Cross-off scribble: strokes drawn with stroke-dashoffset (pathLength = 1). */
@@ -416,4 +563,34 @@ body:has(.board) {
   .scribble[data-animate="true"] {
     animation: board-fade-in 200ms ease-out both !important;
   }
+}
+
+/* ------------------------------------------------------------------------
+ * Start transition (Phase 5): the lobby's paper, redeclared on the overlay so
+ * it starts from the lobby's look even while the board's theme already drives
+ * the page tokens underneath.
+ */
+.start-transition {
+  --paper: #fbf8ef;
+  --paper-rule: #b5d0ea;
+  --paper-margin: #e98b8f;
+  --ink: #2f3337;
+  --ink-soft: #62676c;
+  --ink-faint: #c4c5c1;
+}
+@media (prefers-color-scheme: dark) {
+  .start-transition {
+    --paper: #33302a;
+    --paper-rule: #46586e;
+    --paper-margin: #7f4247;
+    --ink: #ebe6da;
+    --ink-soft: #b7b0a2;
+    --ink-faint: #5c584f;
+  }
+}
+.start-transition .start-cell {
+  position: relative;
+  min-width: 0;
+  aspect-ratio: 1 / var(--board-cell-ratio);
+  container-type: inline-size;
 }
