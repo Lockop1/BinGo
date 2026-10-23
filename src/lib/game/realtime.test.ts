@@ -2,16 +2,19 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SYNC_POLL_MS,
   applyGameChange,
+  applyMediaChange,
   applyPlayerChange,
   applySquareChange,
   isNewerSquare,
+  mergeMedia,
   mergeSnapshot,
   syncPollMs,
   timestampMicros,
   toRowChange,
+  upsertMedia,
   type GameSnapshot,
 } from "@/lib/game/realtime";
-import type { Game, Player, Square } from "@/lib/game/types";
+import type { Game, Media, Player, Square } from "@/lib/game/types";
 
 const GAME_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -57,6 +60,19 @@ function square(position: number, updatedAt: string, overrides: Partial<Square> 
     completed_by_player_id: null,
     completed_at: null,
     updated_at: updatedAt,
+    ...overrides,
+  };
+}
+
+function media(id: string, createdAt: string, overrides: Partial<Media> = {}): Media {
+  return {
+    id,
+    game_id: GAME_ID,
+    square_id: "sq-0",
+    player_id: "a",
+    storage_path: `${GAME_ID}/0/${id}.jpg`,
+    kind: "photo",
+    created_at: createdAt,
     ...overrides,
   };
 }
@@ -162,11 +178,47 @@ describe("applyGameChange", () => {
   });
 });
 
+describe("applyMediaChange", () => {
+  const first = media("m1", "2026-10-23T21:00:00.000001+00:00");
+  const second = media("m2", "2026-10-23T21:00:00.000002+00:00", { kind: "video", storage_path: `${GAME_ID}/0/m2.mp4` });
+  const held = [first, second];
+
+  it("inserts in upload order", () => {
+    const early = media("m0", "2026-10-23T20:59:59+00:00");
+    expect(applyMediaChange(held, { type: "INSERT", row: early }).map((m) => m.id)).toEqual(["m0", "m1", "m2"]);
+    const tie = media("m15", "2026-10-23T21:00:00.000001+00:00");
+    expect(applyMediaChange(held, { type: "INSERT", row: tie }).map((m) => m.id)).toEqual(["m1", "m15", "m2"]);
+  });
+
+  it("dedupes by id (a duplicate event, or the upload result and its event)", () => {
+    expect(applyMediaChange(held, { type: "INSERT", row: { ...first } })).toBe(held);
+    expect(applyMediaChange(held, { type: "UPDATE", row: { ...second } })).toBe(held);
+    expect(upsertMedia(held, { ...first })).toBe(held);
+  });
+
+  it("removes deleted rows by id", () => {
+    expect(applyMediaChange(held, { type: "DELETE", old: { id: "m1" } }).map((m) => m.id)).toEqual(["m2"]);
+    expect(applyMediaChange(held, { type: "DELETE", old: { id: "missing" } })).toBe(held);
+    expect(applyMediaChange(held, { type: "DELETE", old: {} })).toBe(held);
+  });
+
+  it("mergeMedia keeps held rows a fetch has not seen yet and the held array when nothing changed", () => {
+    const fromUpload = media("m3", "2026-10-23T21:00:05+00:00");
+    const merged = mergeMedia([...held, fromUpload], [first, second]);
+    expect(merged.map((m) => m.id)).toEqual(["m1", "m2", "m3"]);
+    expect(mergeMedia(held, [{ ...first }, { ...second }])).toBe(held);
+    const fetchedNew = media("m4", "2026-10-23T21:00:06+00:00");
+    expect(mergeMedia(held, [first, second, fetchedNew]).map((m) => m.id)).toEqual(["m1", "m2", "m4"]);
+    expect(mergeMedia([], [])).toEqual([]);
+  });
+});
+
 describe("mergeSnapshot", () => {
   const base: GameSnapshot = {
     game: game(),
     players: [player("a", "2026-10-23T20:00:00Z")],
     squares: [square(0, "2026-10-23T20:00:05Z", { label: "From event" }), square(1, "2026-10-23T20:00:00Z")],
+    media: [media("m1", "2026-10-23T21:00:00Z")],
   };
 
   it("keeps a held square that is newer than the fetched one, takes newer fetched rows", () => {
@@ -174,8 +226,10 @@ describe("mergeSnapshot", () => {
       game: game({ free_center: false }),
       players: [player("a", "2026-10-23T20:00:00Z"), player("b", "2026-10-23T20:01:00Z")],
       squares: [square(0, "2026-10-23T20:00:04Z", { label: "Older" }), square(1, "2026-10-23T20:00:06Z", { label: "New" })],
+      media: [media("m2", "2026-10-23T21:00:01Z")],
     };
     const merged = mergeSnapshot(base, fetched);
+    expect(merged.media.map((m) => m.id)).toEqual(["m1", "m2"]);
     expect(merged.squares[0].label).toBe("From event");
     expect(merged.squares[1].label).toBe("New");
     expect(merged.players).toHaveLength(2);

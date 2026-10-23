@@ -13,6 +13,12 @@ type Props = {
   square: Pick<Square, "position" | "label" | "completed_at" | "completed_by_player_id">;
   me: Pick<Player, "id"> | null;
   players: readonly Player[];
+  /**
+   * The square's completion is still only optimistic on this phone (offline,
+   * or the RPC is in flight). `register_media` needs it on the server, so Add
+   * waits until it lands instead of uploading into a definitive refusal.
+   */
+  pending?: boolean;
   queue?: UploadQueue;
   prepare?: typeof prepareMedia;
 };
@@ -22,7 +28,7 @@ type Props = {
  * while the game is live or ended and the album hasn't expired) and "Share to
  * group chat". The RPC re-checks all of this; hiding is only a courtesy.
  */
-export function MediaActions({ game, square, me, players, queue, prepare }: Props) {
+export function MediaActions({ game, square, me, players, pending = false, queue, prepare }: Props) {
   // The clock is read after mount (never during a prerender); until then the
   // stored status stands in. The RPC re-checks expiry and status regardless.
   const [now, setNow] = useState<number | null>(null);
@@ -38,6 +44,7 @@ export function MediaActions({ game, square, me, players, queue, prepare }: Prop
   if (status === "lobby") hint = GAME_ERROR_COPY.game_not_started;
   else if (expired) hint = GAME_ERROR_COPY.game_expired;
   else if (!done) hint = "Complete it to add a photo or video.";
+  else if (pending) hint = "You can add a photo or video once this is saved.";
 
   return (
     <div className="flex min-w-0 flex-col gap-2" data-testid="media-actions">

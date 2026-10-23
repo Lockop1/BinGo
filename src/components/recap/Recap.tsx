@@ -14,10 +14,11 @@ type Props = {
   media: readonly Media[];
   /** Defaults to real signed URLs from `game-media`; tests pass data: URLs. */
   getSignedUrls?: GetSignedUrls;
+  headingLevel?: "h1" | "h2";
 };
 
 /** The ended game's recap: the paper summary, and the story viewer on "Watch the recap". */
-export function Recap({ game, players, squares, media, getSignedUrls = defaultGetSignedUrls }: Props) {
+export function Recap({ game, players, squares, media, getSignedUrls = defaultGetSignedUrls, headingLevel }: Props) {
   const items = useMemo(() => buildRecapItems(media, squares, players), [media, squares, players]);
   const names = useMemo(() => recapFileNames(items), [items]);
   const [open, setOpen] = useState(false);
@@ -32,6 +33,7 @@ export function Recap({ game, players, squares, media, getSignedUrls = defaultGe
         names={names}
         getSignedUrls={getSignedUrls}
         onWatch={() => setOpen(true)}
+        headingLevel={headingLevel}
       />
       {open && items.length > 0 ? (
         <RecapStory items={items} names={names} getSignedUrls={getSignedUrls} onClose={() => setOpen(false)} />

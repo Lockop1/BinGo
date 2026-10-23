@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "@playwright/test";
 
 /**
@@ -109,4 +111,66 @@ export async function expectFitsWidth(page: Page, label = "") {
   expect(grid, "board grid").not.toBeNull();
   expect(grid!.x, `grid left ${label}`).toBeGreaterThanOrEqual(0);
   expect(grid!.x + grid!.width, `grid right ${label}`).toBeLessThanOrEqual(innerWidth + 0.5);
+}
+
+/** The page never scrolls sideways (for screens without the board grid, e.g. the recap). */
+export async function expectPageFitsWidth(page: Page, label = "") {
+  const { scrollWidth, innerWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    innerWidth: window.innerWidth,
+  }));
+  expect(scrollWidth, `scrollWidth ${label} on ${page.url()}`).toBeLessThanOrEqual(innerWidth);
+}
+
+/** NEXT_PUBLIC_SUPABASE_URL / _ANON_KEY from the environment or .env.local (what `npm run dev` reads). */
+export function publicSupabaseEnv(): { url: string; anonKey: string } | null {
+  let url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  let anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) {
+    try {
+      const text = readFileSync(join(process.cwd(), ".env.local"), "utf8");
+      for (const line of text.split("\n")) {
+        const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
+        if (!m) continue;
+        const value = m[2].replace(/^(['"])(.*)\1$/, "$2");
+        if (m[1] === "NEXT_PUBLIC_SUPABASE_URL") url ??= value;
+        if (m[1] === "NEXT_PUBLIC_SUPABASE_ANON_KEY") anonKey ??= value;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return url && anonKey ? { url, anonKey } : null;
+}
+
+/** The anonymous session's access token from @supabase/ssr's (possibly chunked) auth cookie. */
+export async function accessToken(context: BrowserContext): Promise<string> {
+  const parts = (await context.cookies())
+    .map((c) => ({ c, m: /^sb-.+-auth-token(?:\.(\d+))?$/.exec(c.name) }))
+    .filter((x) => x.m !== null)
+    .sort((a, b) => Number(a.m![1] ?? 0) - Number(b.m![1] ?? 0))
+    .map((x) => x.c.value);
+  expect(parts.length, "auth cookie").toBeGreaterThan(0);
+  let raw = decodeURIComponent(parts.join(""));
+  if (raw.startsWith("base64-")) raw = Buffer.from(raw.slice("base64-".length), "base64url").toString("utf8");
+  const token = (JSON.parse(raw) as { access_token?: string }).access_token;
+  expect(token, "access token").toBeTruthy();
+  return token!;
+}
+
+/**
+ * Calls an RPC as the given phone's anonymous user (same RLS / security
+ * definer checks as the app). Used where the app's own path can't finish
+ * locally, e.g. `register_media` after an upload (local Storage is a stub).
+ */
+export async function rpcAs<T>(context: BrowserContext, name: string, args: Record<string, unknown>): Promise<T> {
+  const env = publicSupabaseEnv();
+  if (!env) throw new Error("NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+  const token = await accessToken(context);
+  const res = await context.request.post(`${env.url}/rest/v1/rpc/${name}`, {
+    headers: { apikey: env.anonKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    data: args,
+  });
+  expect(res.ok(), `${name}: ${res.status()} ${await res.text()}`).toBe(true);
+  return (await res.json()) as T;
 }

@@ -18,6 +18,8 @@ type Props = {
   names: readonly string[];
   getSignedUrls: GetSignedUrls;
   onWatch: () => void;
+  /** "Night recap" is the page heading on the ended screen (h1), a section elsewhere (h2). */
+  headingLevel?: "h1" | "h2";
 };
 
 /** "Saturday, November 22" in the viewer's locale. */
@@ -28,7 +30,16 @@ function longDate(iso: string): string {
 type ZipState = { kind: "idle" } | { kind: "working"; progress: ZipProgress | null } | { kind: "done"; failed: number } | { kind: "error" };
 
 /** The paper "Night recap" card: totals, lines, who did what, the album deadline and its actions. */
-export function RecapSummary({ game, players, squares, items, names, getSignedUrls, onWatch }: Props) {
+export function RecapSummary({
+  game,
+  players,
+  squares,
+  items,
+  names,
+  getSignedUrls,
+  onWatch,
+  headingLevel: Heading = "h2",
+}: Props) {
   const [zip, setZip] = useState<ZipState>({ kind: "idle" });
   const completed = squares.filter((s) => s.completed_at !== null).sort((a, b) => a.position - b.position);
   const lines = completedLines(squares);
@@ -61,9 +72,9 @@ export function RecapSummary({ game, players, squares, items, names, getSignedUr
   return (
     <section className="flex min-w-0 flex-col gap-[14px]" aria-labelledby="recap-title" data-testid="recap-summary">
       <div className="min-w-0">
-        <h2 id="recap-title" className="text-4xl leading-[56px] tracking-wide">
+        <Heading id="recap-title" className="text-4xl leading-[56px] tracking-wide">
           Night recap
-        </h2>
+        </Heading>
         <p className="text-xl leading-7 break-words text-ink-soft">{game.name}</p>
       </div>
 

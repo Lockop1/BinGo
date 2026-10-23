@@ -121,3 +121,35 @@ export function createToastQueue(options: ToastQueueOptions = {}): ToastQueue {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Media news
+
+type MediaLike = { id: string; square_id: string; player_id: string; kind: "photo" | "video" };
+type MediaToastContext = {
+  players: readonly { id: string; display_name: string; color: number }[];
+  squares: readonly { id: string; position: number; label: string }[];
+  /** The viewer's player id: their own uploads never toast. */
+  meId: string | null;
+};
+
+/**
+ * "Jake added a photo to Skyline Chili" for every media row not in `seen`
+ * that someone else added (upload order). Tapping one opens that square.
+ */
+export function mediaToasts(seen: ReadonlySet<string>, media: readonly MediaLike[], ctx: MediaToastContext): ToastInput[] {
+  const out: ToastInput[] = [];
+  for (const m of media) {
+    if (seen.has(m.id) || m.player_id === ctx.meId) continue;
+    const who = ctx.players.find((p) => p.id === m.player_id) ?? null;
+    const square = ctx.squares.find((s) => s.id === m.square_id) ?? null;
+    const what = m.kind === "video" ? "a video" : "a photo";
+    const where = square ? ` to ${square.label.trim() || `square ${square.position + 1}`}` : "";
+    out.push({
+      text: `${who?.display_name ?? "Someone"} added ${what}${where}`,
+      color: who?.color ?? null,
+      position: square?.position ?? null,
+    });
+  }
+  return out;
+}

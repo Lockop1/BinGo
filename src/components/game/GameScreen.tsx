@@ -5,18 +5,19 @@ import { BoardScreen } from "@/components/board/BoardScreen";
 import { StartTransition, type StartSquare } from "@/components/game/StartTransition";
 import { NotFound } from "@/components/join/JoinScreen";
 import { Lobby } from "@/components/lobby/Lobby";
-import { PaperPage, PaperTitle } from "@/components/paper/PaperPage";
+import { useUploadedMedia } from "@/components/media/useUploadedMedia";
+import { PaperPage } from "@/components/paper/PaperPage";
 import { SessionGate } from "@/components/providers/SessionGate";
 import { useSession } from "@/components/providers/SessionProvider";
-import { PencilButton } from "@/components/ui/PencilButton";
+import { Recap } from "@/components/recap/Recap";
+import { PencilButton, PencilLink } from "@/components/ui/PencilButton";
 import { SkeletonLines } from "@/components/ui/Skeleton";
-import { STATUS_LABEL, shortDate } from "@/lib/game/status";
 import { useGame } from "@/lib/game/useGame";
 import { effectiveStatus, type GameStatus } from "@/lib/game/types";
 import { useSettings } from "@/lib/settings/useSettings";
 
 /**
- * /game/[id]: the paper lobby, then the live board, then the ended state.
+ * /game/[id]: the paper lobby, then the live board, then the recap.
  * Data and live sync live in useGame; the screen follows the game's
  * effective status, so a start or end seen via Realtime, a resync or the
  * host's own RPC result all switch screens.
@@ -52,6 +53,7 @@ type StartShow = { key: number; name: string; squares: StartSquare[]; freeCenter
 function GameView({ gameId }: { gameId: string }) {
   const result = useGame(gameId);
   const { settings, theme } = useSettings();
+  useUploadedMedia(gameId, result.applyMedia);
 
   // Effective status as last rendered on this mount (null until the game has
   // loaded), so only a flip seen live starts the transition. Adjusted during
@@ -111,6 +113,7 @@ function GameView({ gameId }: { gameId: string }) {
           game={game}
           players={result.players}
           squares={result.squares}
+          media={result.media}
           me={result.me}
           syncState={result.syncState}
           refresh={result.refresh}
@@ -149,13 +152,13 @@ function GameView({ gameId }: { gameId: string }) {
             applySquare={result.applySquare}
           />
         ) : (
-          <>
-            <p className="text-lg leading-7 text-ink-soft">{STATUS_LABEL[status]}</p>
-            <PaperTitle>{game.name}</PaperTitle>
-            <p className="text-xl leading-7" data-testid="ended-placeholder">
-              This game has ended. Album until {shortDate(game.expires_at)}.
-            </p>
-          </>
+          // Ended: the paper recap (its story viewer brings its own dark backdrop).
+          <div className="flex min-w-0 flex-col gap-7" data-testid="game-ended">
+            <Recap game={game} players={result.players} squares={result.squares} media={result.media} headingLevel="h1" />
+            <PencilLink href="/" variant="secondary" className="w-full" data-testid="back-home">
+              Back to home
+            </PencilLink>
+          </div>
         )}
       </div>
     </Paper>

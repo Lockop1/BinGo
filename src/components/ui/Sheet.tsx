@@ -16,6 +16,13 @@ type SheetProps = {
   /** Element to focus when the sheet opens (defaults to the first focusable one). */
   initialFocus?: RefObject<HTMLElement | null>;
   testId?: string;
+  /**
+   * Replaces the default backdrop color class (`bg-ink/35`). The backdrop also
+   * carries `data-sheet-backdrop`, which theme CSS can target instead.
+   */
+  backdropClassName?: string;
+  /** Called once the close animation has finished and the sheet is gone. */
+  onExitComplete?: () => void;
 };
 
 /**
@@ -23,14 +30,30 @@ type SheetProps = {
  * focus, closes on Escape, on the backdrop and by dragging the handle down.
  * Focus returns to whatever was focused before it opened.
  */
-export function Sheet({ open, onClose, title, children, initialFocus, testId }: SheetProps) {
+export function Sheet({
+  open,
+  onClose,
+  title,
+  children,
+  initialFocus,
+  testId,
+  backdropClassName,
+  onExitComplete,
+}: SheetProps) {
   // Portals need document; the sheet only ever opens after a tap, so there is
   // nothing to render on the server.
   if (typeof document === "undefined") return null;
   return createPortal(
-    <AnimatePresence>
+    <AnimatePresence onExitComplete={onExitComplete}>
       {open ? (
-        <SheetPanel key="sheet" onClose={onClose} title={title} initialFocus={initialFocus} testId={testId}>
+        <SheetPanel
+          key="sheet"
+          onClose={onClose}
+          title={title}
+          initialFocus={initialFocus}
+          testId={testId}
+          backdropClassName={backdropClassName}
+        >
           {children}
         </SheetPanel>
       ) : null}
@@ -39,7 +62,14 @@ export function Sheet({ open, onClose, title, children, initialFocus, testId }: 
   );
 }
 
-function SheetPanel({ onClose, title, children, initialFocus, testId }: Omit<SheetProps, "open">) {
+function SheetPanel({
+  onClose,
+  title,
+  children,
+  initialFocus,
+  testId,
+  backdropClassName,
+}: Omit<SheetProps, "open" | "onExitComplete">) {
   const reduce = useReducedMotion();
   const drag = useDragControls();
   const panel = useRef<HTMLDivElement>(null);
@@ -103,7 +133,8 @@ function SheetPanel({ onClose, title, children, initialFocus, testId }: Omit<She
     <div className="fixed inset-0 z-50 flex flex-col justify-end">
       <motion.div
         aria-hidden
-        className="absolute inset-0 bg-ink/35"
+        data-sheet-backdrop
+        className={`absolute inset-0 ${backdropClassName ?? "bg-ink/35"}`}
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}

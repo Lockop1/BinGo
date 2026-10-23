@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_QUEUED, TOAST_MS, createToastQueue } from "@/lib/game/toasts";
+import { MAX_QUEUED, TOAST_MS, createToastQueue, mediaToasts } from "@/lib/game/toasts";
 import { manualClock } from "@/lib/game/testFixtures";
 
 function setup() {
@@ -72,5 +72,44 @@ describe("toast queue", () => {
     expect(queue.getState()).toEqual({ current: null, queued: [] });
     expect(calls).toBe(3);
     off();
+  });
+});
+
+describe("mediaToasts", () => {
+  const ctx = {
+    players: [
+      { id: "me", display_name: "Me", color: 0 },
+      { id: "jake", display_name: "Jake", color: 3 },
+    ],
+    squares: [
+      { id: "sq-0", position: 0, label: "Skyline Chili" },
+      { id: "sq-7", position: 7, label: "  " },
+    ],
+    meId: "me",
+  };
+  const row = (id: string, player_id: string, square_id: string, kind: "photo" | "video" = "photo") => ({
+    id,
+    player_id,
+    square_id,
+    kind,
+  });
+
+  it("announces new media from other players with their color and the square to open", () => {
+    const media = [row("m1", "jake", "sq-0"), row("m2", "jake", "sq-7", "video"), row("m3", "me", "sq-0")];
+    expect(mediaToasts(new Set(), media, ctx)).toEqual([
+      { text: "Jake added a photo to Skyline Chili", color: 3, position: 0 },
+      { text: "Jake added a video to square 8", color: 3, position: 7 },
+    ]);
+  });
+
+  it("skips rows already seen and never announces the viewer's own uploads", () => {
+    const media = [row("m1", "jake", "sq-0"), row("m3", "me", "sq-0")];
+    expect(mediaToasts(new Set(["m1"]), media, ctx)).toEqual([]);
+  });
+
+  it("falls back when the player or square is not loaded yet", () => {
+    expect(mediaToasts(new Set(), [row("m9", "ghost", "sq-x")], ctx)).toEqual([
+      { text: "Someone added a photo", color: null, position: null },
+    ]);
   });
 });

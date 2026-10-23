@@ -11,7 +11,8 @@ const ICON_BUTTON =
 
 /**
  * The only thing above the grid: game name, a quiet sync mark (only when not
- * live or when taps are waiting), players, settings, album.
+ * live or when taps are waiting), players, settings, album (with a small
+ * count once there is media).
  */
 export function TopBar({
   name,
@@ -19,8 +20,10 @@ export function TopBar({
   theme,
   syncState,
   pendingCount,
+  mediaCount,
   onPlayers,
   onSettings,
+  onAlbum,
   onRetry,
 }: {
   name: string;
@@ -28,8 +31,11 @@ export function TopBar({
   theme: PaletteTheme;
   syncState: SyncState;
   pendingCount: number;
+  /** Photos and videos in the album so far. */
+  mediaCount: number;
   onPlayers: () => void;
   onSettings: () => void;
+  onAlbum: () => void;
   onRetry: () => void;
 }) {
   const dots = players.slice(0, 4);
@@ -87,12 +93,22 @@ export function TopBar({
 
       <button
         type="button"
-        disabled
-        aria-label="Album (opens when the game ends)"
+        onClick={onAlbum}
+        aria-label={mediaCount > 0 ? `Album: ${mediaCount} so far` : "Album"}
         data-testid="album-button"
-        className={`${ICON_BUTTON} text-board-muted opacity-60`}
+        data-count={mediaCount}
+        className={`${ICON_BUTTON} relative`}
       >
         <Images aria-hidden className="size-6" strokeWidth={2.25} />
+        {mediaCount > 0 ? (
+          <span
+            aria-hidden
+            data-testid="album-count"
+            className="absolute right-0.5 top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-board-ink px-1 font-sans text-[11px] font-semibold leading-none text-board-bg tabular-nums"
+          >
+            {mediaCount > 99 ? "99+" : mediaCount}
+          </span>
+        ) : null}
       </button>
     </header>
   );

@@ -78,9 +78,10 @@ export function ServiceWorkerRegistration() {
     <div
       role="status"
       data-testid="sw-update"
-      className="fixed inset-x-0 top-0 z-50 flex justify-center px-3 pt-[max(8px,env(safe-area-inset-top))]"
+      // Bottom of the screen, so it never covers a page's top "Home" link or the board's top bar.
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex justify-center px-3 pb-[max(8px,env(safe-area-inset-bottom))]"
     >
-      <div className="index-card flex items-center gap-1 pl-3 text-lg text-ink">
+      <div className="index-card pointer-events-auto flex items-center gap-1 pl-3 text-lg text-ink">
         <button
           type="button"
           onClick={() => window.location.reload()}

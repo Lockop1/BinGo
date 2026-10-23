@@ -1,13 +1,15 @@
 "use client";
 
-import { Camera, Share2, Undo2 } from "lucide-react";
+import { Undo2 } from "lucide-react";
 import { BoardSwatch } from "@/components/board/BoardSwatch";
+import { MediaActions } from "@/components/media/MediaActions";
+import { SquareMediaStrip } from "@/components/media/SquareMediaStrip";
 import { HoldButton } from "@/components/ui/HoldButton";
 import { PencilButton } from "@/components/ui/PencilButton";
 import type { DisplaySquare } from "@/lib/game/boardState";
 import { GAME_ERROR_COPY } from "@/lib/game/errors";
 import type { Settled } from "@/lib/game/pendingActions";
-import type { Player } from "@/lib/game/types";
+import type { Game, Media, Player } from "@/lib/game/types";
 import type { SyncState } from "@/lib/game/useGame";
 import type { PaletteTheme } from "@/lib/palette";
 
@@ -23,9 +25,12 @@ export function squareTitle(square: DisplaySquare | undefined): string {
  * The complete-square sheet: full text and details, counter state, who
  * crossed it off and when, and the actions this player may take. The RPCs
  * decide; this only offers what makes sense (Undo for the completer or the
- * host).
+ * host). Below: this square's photos/videos, then Add photo/video (once it is
+ * done) and Share to group chat. The sheet's paper and ink follow the board
+ * theme (globals.css), so the media row needs no theme of its own.
  */
 export function SquareSheetBody({
+  game,
   square,
   players,
   me,
@@ -33,10 +38,13 @@ export function SquareSheetBody({
   theme,
   outcome,
   syncState,
+  media,
+  onOpenMedia,
   onComplete,
   onIncrement,
   onUndo,
 }: {
+  game: Game;
   square: DisplaySquare;
   players: Player[];
   me: Player | null;
@@ -45,6 +53,10 @@ export function SquareSheetBody({
   theme: PaletteTheme;
   outcome: Settled | undefined;
   syncState: SyncState;
+  /** This square's media rows. */
+  media: readonly Media[];
+  /** Opens the album story at this media item. */
+  onOpenMedia: (mediaId: string) => void;
   onComplete: () => void;
   onIncrement: () => void;
   onUndo: () => void;
@@ -134,16 +146,10 @@ export function SquareSheetBody({
         </PencilButton>
       ) : null}
 
-      {/* Phase 6: camera-first capture and sharing. Shown so the layout is real. */}
-      <div className="flex min-w-0 flex-wrap gap-2 pt-1" aria-label="Coming soon">
-        <PencilButton variant="secondary" disabled className="px-3 text-lg" data-testid="add-media">
-          <Camera aria-hidden className="size-5" strokeWidth={2.25} />
-          Photo/video
-        </PencilButton>
-        <PencilButton variant="secondary" disabled className="px-3 text-lg" data-testid="share-square">
-          <Share2 aria-hidden className="size-5" strokeWidth={2.25} />
-          Share
-        </PencilButton>
+      <SquareMediaStrip media={media} onOpen={onOpenMedia} />
+
+      <div className="border-t-2 border-dashed border-ink-faint pt-[14px]">
+        <MediaActions game={game} square={square} me={me} players={players} pending={square.pending} />
       </div>
     </div>
   );

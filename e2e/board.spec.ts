@@ -88,7 +88,7 @@ test("live board: cross-off, toasts, bingo once, undo, counters, offline, end ga
     await expectNoHorizontalScroll(page, 375);
   }
   await expect(host.getByTestId("players-count")).toHaveText("2");
-  await expect(host.getByTestId("album-button")).toBeDisabled();
+  await expect(host.getByTestId("album-button")).toBeEnabled();
   await friend.setViewportSize({ width: 320, height: 640 });
   await expectNoHorizontalScroll(friend, 320);
 
@@ -230,7 +230,7 @@ test("live board: cross-off, toasts, bingo once, undo, counters, offline, end ga
   await host.getByTestId("end-game-confirm").click();
 
   for (const page of [host, friend]) {
-    await expect(page.getByTestId("ended-placeholder")).toBeVisible(LIVE);
+    await expect(page.getByTestId("recap-summary")).toBeVisible(LIVE);
     await expect(page.getByTestId("game-screen")).toHaveAttribute("data-status", "ended");
     await expect(page.getByTestId("board-grid")).toHaveCount(0);
   }

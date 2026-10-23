@@ -1,5 +1,5 @@
 import type { RealtimeChannel, RealtimePostgresChangesPayload } from "@supabase/supabase-js";
-import type { Game, GameStatus, Player, Square } from "@/lib/game/types";
+import type { Game, GameStatus, Media, Player, Square } from "@/lib/game/types";
 import { createClient } from "@/lib/supabase/client";
 
 /**
@@ -11,7 +11,7 @@ import { createClient } from "@/lib/supabase/client";
  * phone that missed events (bad signal, backgrounded tab) still converges.
  */
 
-export type GameSnapshot = { game: Game; players: Player[]; squares: Square[] };
+export type GameSnapshot = { game: Game; players: Player[]; squares: Square[]; media: Media[] };
 
 /** A `postgres_changes` event reduced to what the merge functions need. */
 export type RowChange<T> =
@@ -115,6 +115,48 @@ export function applyPlayerChange(players: Player[], change: RowChange<Player>):
   return upsertPlayer(players, change.row);
 }
 
+function byCreatedAt(a: Media, b: Media): number {
+  const d = timestampMicros(a.created_at) - timestampMicros(b.created_at);
+  if (d !== 0 && !Number.isNaN(d)) return d;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Applies one media row (event, resync or `register_media` result). Media
+ * rows never change after insert, so a row already held (same id) is a
+ * duplicate delivery and leaves the list untouched. Kept in upload order.
+ */
+export function upsertMedia(media: Media[], row: Media): Media[] {
+  if (media.some((m) => m.id === row.id)) return media;
+  return [...media, row].sort(byCreatedAt);
+}
+
+export function applyMediaChange(media: Media[], change: RowChange<Media>): Media[] {
+  if (change.type === "DELETE") {
+    const id = change.old.id;
+    if (!id) return media;
+    const next = media.filter((m) => m.id !== id);
+    return next.length === media.length ? media : next;
+  }
+  return upsertMedia(media, change.row);
+}
+
+/**
+ * Fetched media plus any held row the fetch did not include yet (one applied
+ * from an upload's `register_media` result or an event while the fetch was in
+ * flight). No RPC deletes a media row (only the game's cascade does, and then
+ * the whole game is gone), so a union by id never resurrects a deleted row;
+ * a Realtime DELETE still removes one via `applyMediaChange`.
+ */
+export function mergeMedia(held: Media[], fetched: Media[]): Media[] {
+  const ids = new Set(fetched.map((m) => m.id));
+  const extra = held.filter((m) => !ids.has(m.id));
+  const next = [...fetched, ...extra].sort(byCreatedAt);
+  // Same rows in the same order: keep the held array (no re-render).
+  if (next.length === held.length && next.every((m, i) => m.id === held[i].id)) return held;
+  return next;
+}
+
 const STATUS_RANK: Record<GameStatus, number> = { lobby: 0, active: 1, ended: 2 };
 
 /**
@@ -137,7 +179,7 @@ export function mergeGame(current: Game, incoming: Game): Game {
  * Folds a freshly fetched snapshot into the held one. Squares keep whichever
  * version is newer per row (an event may have landed while the fetch was in
  * flight); players are replaced wholesale (the server list is authoritative);
- * the game goes through `mergeGame`.
+ * media is a union by id (`mergeMedia`); the game goes through `mergeGame`.
  */
 export function mergeSnapshot(current: GameSnapshot | null, incoming: GameSnapshot): GameSnapshot {
   if (!current || current.game.id !== incoming.game.id) return incoming;
@@ -146,7 +188,12 @@ export function mergeSnapshot(current: GameSnapshot | null, incoming: GameSnapsh
     const mine = held.get(row.id);
     return mine && !isNewerSquare(row, mine) ? mine : row;
   });
-  return { game: mergeGame(current.game, incoming.game), players: incoming.players, squares };
+  return {
+    game: mergeGame(current.game, incoming.game),
+    players: incoming.players,
+    squares,
+    media: mergeMedia(current.media, incoming.media),
+  };
 }
 
 /** Converts a supabase-js payload into a RowChange (null for anything malformed). */
@@ -166,13 +213,14 @@ export type GameChannelHandlers = {
   onGame: (change: RowChange<Game>) => void;
   onPlayer: (change: RowChange<Player>) => void;
   onSquare: (change: RowChange<Square>) => void;
+  onMedia: (change: RowChange<Media>) => void;
   /** Every channel status; `SUBSCRIBED` also fires again after a reconnect. */
   onStatus: (status: `${"SUBSCRIBED" | "TIMED_OUT" | "CLOSED" | "CHANNEL_ERROR"}`) => void;
 };
 
 /**
  * One channel per game with `postgres_changes` on games (`id=eq.<id>`),
- * players and squares (`game_id=eq.<id>`). RLS decides who receives events.
+ * players, squares and media (`game_id=eq.<id>`). RLS decides who receives events.
  * Returns an unsubscribe function that removes the channel.
  */
 export function subscribeToGame(gameId: string, handlers: GameChannelHandlers): () => void {
@@ -201,6 +249,14 @@ export function subscribeToGame(gameId: string, handlers: GameChannelHandlers): 
       (p) => {
         const change = toRowChange(p);
         if (change) handlers.onSquare(change);
+      },
+    )
+    .on<Media>(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "media", filter: `game_id=eq.${gameId}` },
+      (p) => {
+        const change = toRowChange(p);
+        if (change) handlers.onMedia(change);
       },
     )
     .subscribe((status) => handlers.onStatus(status));

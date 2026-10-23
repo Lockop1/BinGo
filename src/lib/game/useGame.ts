@@ -5,18 +5,20 @@ import { useSession } from "@/components/providers/SessionProvider";
 import { type GameError, toGameError } from "@/lib/game/errors";
 import {
   applyGameChange,
+  applyMediaChange,
   applyPlayerChange,
   applySquareChange,
   mergeGame,
   mergeSnapshot,
   subscribeToGame,
   syncPollMs,
+  upsertMedia,
   upsertPlayer,
   upsertSquare,
   type GameSnapshot,
   type RowChange,
 } from "@/lib/game/realtime";
-import { effectiveStatus, type Game, type Player, type Square } from "@/lib/game/types";
+import { effectiveStatus, type Game, type Media, type Player, type Square } from "@/lib/game/types";
 import { createClient } from "@/lib/supabase/client";
 
 export type { GameSnapshot } from "@/lib/game/realtime";
@@ -37,13 +39,15 @@ export type SyncState = "live" | "syncing" | "offline";
 export type UseGameResult = UseGameState & {
   /** The caller's player row, once loaded. */
   me: Player | null;
-  /** Re-fetch game, players and squares. Resolves when the new state is set. */
+  /** Re-fetch game, players, squares and media. Resolves when the new state is set. */
   refresh: () => Promise<void>;
   syncState: SyncState;
   /** Fold an authoritative row returned by an RPC into the held state. */
   applyGame: (row: Game) => void;
   applyPlayer: (row: Player) => void;
   applySquare: (row: Square) => void;
+  /** e.g. the `register_media` row from a finished upload, so the album updates at once. */
+  applyMedia: (row: Media) => void;
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -53,20 +57,27 @@ const SYNCING_DELAY_MS = 400;
 /** A fetch that raced a newer event or RPC result is retried this many times before merging anyway. */
 const RACE_RETRIES = 2;
 
-/** Loads one game (RLS: members only) with its players and squares in parallel. */
+/** Loads one game (RLS: members only) with its players, squares and media in parallel. */
 export async function fetchGameSnapshot(gameId: string): Promise<GameSnapshot | null> {
   if (!UUID.test(gameId)) return null;
   const supabase = createClient();
-  const [gameRes, playersRes, squaresRes] = await Promise.all([
+  const [gameRes, playersRes, squaresRes, mediaRes] = await Promise.all([
     supabase.from("games").select("*").eq("id", gameId).maybeSingle(),
     supabase.from("players").select("*").eq("game_id", gameId).order("joined_at", { ascending: true }),
     supabase.from("squares").select("*").eq("game_id", gameId).order("position", { ascending: true }),
+    supabase
+      .from("media")
+      .select("*")
+      .eq("game_id", gameId)
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true }),
   ]);
   if (gameRes.error) throw gameRes.error;
   if (!gameRes.data) return null;
   if (playersRes.error) throw playersRes.error;
   if (squaresRes.error) throw squaresRes.error;
-  return { game: gameRes.data, players: playersRes.data, squares: squaresRes.data };
+  if (mediaRes.error) throw mediaRes.error;
+  return { game: gameRes.data, players: playersRes.data, squares: squaresRes.data, media: mediaRes.data };
 }
 
 // Browser signals as external stores (no setState inside effects).
@@ -136,7 +147,10 @@ export function useGame(gameId: string): UseGameResult {
       setFailed(false);
       setState((prev) => {
         if (!snapshot) return { status: "not_found" };
-        const held = prev.status === "ready" ? { game: prev.game, players: prev.players, squares: prev.squares } : null;
+        const held =
+          prev.status === "ready"
+            ? { game: prev.game, players: prev.players, squares: prev.squares, media: prev.media }
+            : null;
         return { status: "ready", ...mergeSnapshot(held, snapshot) };
       });
       return;
@@ -170,9 +184,16 @@ export function useGame(gameId: string): UseGameResult {
     mutationSeq.current++;
     setState((prev) => {
       if (prev.status !== "ready") return prev;
-      const next = reduce({ game: prev.game, players: prev.players, squares: prev.squares });
+      const next = reduce({ game: prev.game, players: prev.players, squares: prev.squares, media: prev.media });
       if (!next) return { status: "not_found" };
-      if (next.game === prev.game && next.players === prev.players && next.squares === prev.squares) return prev;
+      if (
+        next.game === prev.game &&
+        next.players === prev.players &&
+        next.squares === prev.squares &&
+        next.media === prev.media
+      ) {
+        return prev;
+      }
       return { status: "ready", ...next };
     });
   }, []);
@@ -180,6 +201,10 @@ export function useGame(gameId: string): UseGameResult {
   const applyGame = useCallback((row: Game) => apply((s) => ({ ...s, game: mergeGame(s.game, row) })), [apply]);
   const applyPlayer = useCallback((row: Player) => apply((s) => ({ ...s, players: upsertPlayer(s.players, row) })), [apply]);
   const applySquare = useCallback((row: Square) => apply((s) => ({ ...s, squares: upsertSquare(s.squares, row) })), [apply]);
+  const applyMedia = useCallback(
+    (row: Media) => apply((s) => (row.game_id === s.game.id ? { ...s, media: upsertMedia(s.media, row) } : s)),
+    [apply],
+  );
 
   // Initial load.
   useEffect(() => {
@@ -196,6 +221,7 @@ export function useGame(gameId: string): UseGameResult {
       }),
       onPlayer: (change) => apply((s) => ({ ...s, players: applyPlayerChange(s.players, change) })),
       onSquare: (change) => apply((s) => ({ ...s, squares: applySquareChange(s.squares, change) })),
+      onMedia: (change) => apply((s) => ({ ...s, media: applyMediaChange(s.media, change) })),
       onStatus: (status) => {
         if (status === "SUBSCRIBED") void refresh();
       },
@@ -227,5 +253,5 @@ export function useGame(gameId: string): UseGameResult {
 
   const syncState: SyncState = !online || failed ? "offline" : syncing ? "syncing" : "live";
   const me = state.status === "ready" ? (state.players.find((p) => p.user_id === userId) ?? null) : null;
-  return { ...state, me, refresh, syncState, applyGame, applyPlayer, applySquare };
+  return { ...state, me, refresh, syncState, applyGame, applyPlayer, applySquare, applyMedia };
 }

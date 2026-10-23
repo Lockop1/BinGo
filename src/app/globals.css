@@ -346,11 +346,12 @@ html:has(.board[data-theme="scoreboard"]) {
   --danger: #ff8f84;
 }
 /*
- * The sheet backdrop is `bg-ink/35` (components/ui/Sheet.tsx): a dark veil on
- * paper, but a grey wash over the near-black Scoreboard, whose sheet ink is
- * light. Dim it with black instead while the Scoreboard is up.
+ * The sheet backdrop (`[data-sheet-backdrop]`, components/ui/Sheet.tsx) is
+ * `bg-ink/35` by default: a dark veil on paper, but a grey wash over the
+ * near-black Scoreboard, whose sheet ink is light. Dim it with black instead
+ * while the Scoreboard is up.
  */
-html:has(.board[data-theme="scoreboard"]) .bg-ink\/35 {
+html:has(.board[data-theme="scoreboard"]) [data-sheet-backdrop] {
   background-color: rgb(0 0 0 / 0.55);
 }
 

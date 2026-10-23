@@ -8,6 +8,8 @@ import { SettingsSheetBody } from "@/components/board/SettingsSheet";
 import { SquareSheetBody, squareTitle } from "@/components/board/SquareSheet";
 import { Toasts } from "@/components/board/Toasts";
 import { TopBar } from "@/components/board/TopBar";
+import { RecapStory } from "@/components/recap/RecapStory";
+import { buildRecapItems, recapFileNames, type RecapItem } from "@/components/recap/recapItems";
 import { Sheet } from "@/components/ui/Sheet";
 import { completedLines, isBlackout } from "@/lib/game/bingo";
 import { diffBoards, type BoardEvent, type DisplaySquare } from "@/lib/game/boardState";
@@ -16,11 +18,12 @@ import { GAME_ERROR_COPY, errorCopy } from "@/lib/game/errors";
 import type { Settled } from "@/lib/game/pendingActions";
 import { endGame } from "@/lib/game/rpc";
 import { timestampMicros } from "@/lib/game/realtime";
-import { createToastQueue, type Toast, type ToastInput } from "@/lib/game/toasts";
-import type { Game, Player, Square } from "@/lib/game/types";
+import { createToastQueue, mediaToasts, type Toast, type ToastInput } from "@/lib/game/toasts";
+import type { Game, Media, Player, Square } from "@/lib/game/types";
 import { useBoardState } from "@/lib/game/useBoardState";
 import type { SyncState } from "@/lib/game/useGame";
 import { doublePulse, pulse } from "@/lib/haptics";
+import { getSignedUrls } from "@/lib/media/signedUrls";
 import { paletteThemeFor, type BoardTheme } from "@/lib/settings/settings";
 import { useSettings } from "@/lib/settings/useSettings";
 
@@ -28,6 +31,8 @@ export type BoardScreenProps = {
   game: Game;
   players: Player[];
   squares: Square[];
+  /** Every photo/video registered so far (useGame keeps it live). */
+  media: Media[];
   me: Player | null;
   syncState: SyncState;
   refresh: () => Promise<void>;
@@ -35,7 +40,10 @@ export type BoardScreenProps = {
   applySquare: (row: Square) => void;
 };
 
-type SheetState = { kind: "square"; position: number } | { kind: "players" } | { kind: "settings" };
+type SheetState = { kind: "square"; position: number } | { kind: "players" } | { kind: "settings" } | { kind: "album" };
+
+/** The live album as it was when opened, in board order (new uploads don't shift an open story). */
+type StoryState = { items: RecapItem[]; names: string[]; startIndex: number };
 
 /** Browser chrome color per theme (matches --whiteboard-bg / --scoreboard-bg in globals.css). */
 const THEME_COLOR: Record<BoardTheme, string> = { whiteboard: "#ffffff", scoreboard: "#0b0b0d" };
@@ -92,12 +100,14 @@ function toastFor(
  * The live board (status `active`). The board owns the screen: a slim top bar,
  * then the 5×5 grid. Completions are optimistic (useBoardState) and every
  * change from other phones shows as a cross-off plus a toast. Each new bingo
- * line celebrates once per phone.
+ * line celebrates once per phone. The album button (and each thumbnail in a
+ * square's sheet) opens the story viewer over the live album so far.
  */
 export function BoardScreen({
   game,
   players,
   squares,
+  media,
   me,
   syncState,
   refresh,
@@ -165,9 +175,27 @@ export function BoardScreen({
     }
   }, [board, meId, players, host, isHost, toasts, tracker, celebrations]);
 
+  // "Jake added a photo to Skyline Chili": media from other phones after mount.
+  const seenMedia = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const seen = seenMedia.current;
+    if (seen === null) {
+      seenMedia.current = new Set(media.map((m) => m.id));
+      return;
+    }
+    const news = mediaToasts(seen, media, { players, squares, meId });
+    for (const m of media) seen.add(m.id);
+    for (const t of news) toasts.push(t);
+  }, [media, players, squares, meId, toasts]);
+
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [story, setStory] = useState<StoryState | null>(null);
+  // A thumbnail tap closes the square sheet first and opens the story once the
+  // sheet is gone, so the two never fight over focus, Escape or scroll lock.
+  const storyAfterSheet = useRef<StoryState | null>(null);
   const openSheet = (next: SheetState) => {
+    storyAfterSheet.current = null;
     setSheet(next);
     setSheetOpen(true);
   };
@@ -176,13 +204,36 @@ export function BoardScreen({
     if (sheet?.kind === "square") boardState.clearOutcome(sheet.position);
   };
 
+  const albumStory = (mediaId: string | null): StoryState | null => {
+    const items = buildRecapItems(media, squares, players);
+    if (items.length === 0) return null;
+    const at = mediaId ? items.findIndex((item) => item.media.id === mediaId) : 0;
+    return { items, names: recapFileNames(items), startIndex: Math.max(0, at) };
+  };
+  const openAlbum = () => {
+    const next = albumStory(null);
+    if (next) setStory(next);
+    else openSheet({ kind: "album" });
+  };
+  const openMedia = (mediaId: string) => {
+    const next = albumStory(mediaId);
+    if (!next) return;
+    storyAfterSheet.current = next;
+    closeSheet();
+  };
+  const onSquareSheetGone = () => {
+    const next = storyAfterSheet.current;
+    storyAfterSheet.current = null;
+    if (next) setStory(next);
+  };
+
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState<string | null>(null);
   const endTheGame = async () => {
     setEnding(true);
     setEndError(null);
     try {
-      // Status becomes ended: GameScreen swaps the board for the recap placeholder.
+      // Status becomes ended: GameScreen swaps the board for the recap.
       applyGame(await endGame({ game_id: game.id }));
     } catch (error) {
       setEndError(errorCopy(error));
@@ -193,6 +244,7 @@ export function BoardScreen({
   };
 
   const selected = sheet?.kind === "square" ? board.find((s) => s.position === sheet.position) : undefined;
+  const selectedMedia = selected ? media.filter((m) => m.square_id === selected.id) : NO_MEDIA;
   const current = celebration.current;
   const highlight = current && current.phase === "highlight" ? current.positions : NO_CELLS;
 
@@ -217,8 +269,10 @@ export function BoardScreen({
         theme={paletteTheme}
         syncState={syncState}
         pendingCount={boardState.pendingCount}
+        mediaCount={media.length}
         onPlayers={() => openSheet({ kind: "players" })}
         onSettings={() => openSheet({ kind: "settings" })}
+        onAlbum={openAlbum}
         onRetry={() => {
           boardState.retry();
           void refresh();
@@ -260,9 +314,11 @@ export function BoardScreen({
         onClose={closeSheet}
         title={squareTitle(selected)}
         testId="square-sheet"
+        onExitComplete={onSquareSheetGone}
       >
         {selected ? (
           <SquareSheetBody
+            game={game}
             square={selected}
             players={players}
             me={me}
@@ -270,6 +326,8 @@ export function BoardScreen({
             theme={paletteTheme}
             outcome={boardState.outcomeFor(selected.position)}
             syncState={syncState}
+            media={selectedMedia}
+            onOpenMedia={openMedia}
             onComplete={() => {
               boardState.complete(selected.position);
               setSheetOpen(false);
@@ -303,8 +361,25 @@ export function BoardScreen({
           onChange={updateSettings}
         />
       </Sheet>
+
+      <Sheet open={sheetOpen && sheet?.kind === "album"} onClose={closeSheet} title="Album" testId="album-sheet">
+        <p className="pb-2 text-xl leading-7" data-testid="album-empty">
+          No photos yet — complete a square and add one from its sheet.
+        </p>
+      </Sheet>
+
+      {story ? (
+        <RecapStory
+          items={story.items}
+          names={story.names}
+          startIndex={story.startIndex}
+          getSignedUrls={getSignedUrls}
+          onClose={() => setStory(null)}
+        />
+      ) : null}
     </main>
   );
 }
 
 const NO_CELLS: readonly number[] = [];
+const NO_MEDIA: readonly Media[] = [];
