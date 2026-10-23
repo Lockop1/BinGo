@@ -212,6 +212,14 @@ supabase/
   migrations/             Supabase CLI migrations (the only way to change schema)
 ```
 
+## Next.js 16 notes
+
+- `cacheComponents: true` is on. Route handlers and pages must NOT export `dynamic`, `runtime` or
+  `revalidate` segment config (the build rejects them); call `await connection()` from `next/server`
+  to opt a handler out of prerendering, and keep `params`/`cookies()`/`useSearchParams` reads under a
+  `<Suspense>` boundary. Route handlers run on Node by default.
+- Middleware is `src/proxy.ts` (exports `proxy`), not `middleware.ts`.
+
 ## Git and migration workflow
 
 - Work on the assigned branch; do not commit to `main` directly.
