@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Bebas_Neue, Patrick_Hand, Permanent_Marker } from "next/font/google";
 import { SessionProvider } from "@/components/providers/SessionProvider";
+import { ServiceWorkerRegistration } from "@/components/pwa/ServiceWorkerRegistration";
 import "./globals.css";
 
 // Pencil (lobby / paper screens), marker (Whiteboard theme), scoreboard (Dark Scoreboard theme).
@@ -11,6 +12,15 @@ const scoreboard = Bebas_Neue({ variable: "--font-scoreboard", weight: "400", su
 export const metadata: Metadata = {
   title: "Bingo Night",
   description: "Activity bingo for a night out with friends.",
+  applicationName: "Bingo Night",
+  icons: {
+    icon: [
+      { url: "/icons/icon.svg", type: "image/svg+xml" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+  appleWebApp: { capable: true, statusBarStyle: "default", title: "Bingo Night" },
 };
 
 export const viewport: Viewport = {
@@ -31,6 +41,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         <SessionProvider>{children}</SessionProvider>
+        <ServiceWorkerRegistration />
       </body>
     </html>
   );

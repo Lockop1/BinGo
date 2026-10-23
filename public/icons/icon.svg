@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Bingo Night app icon: a pencil 5x5 grid on paper with one scribbled red cross. -->
+  <rect width="512" height="512" rx="112" fill="#fbf8ef"/>
+  <g fill="none" stroke="#2f3337" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer frame, slightly uneven like a hand-drawn box. -->
+    <path stroke-width="14" d="M88 90 Q256 84 426 88 Q430 256 425 426 Q256 430 87 424 Q83 256 88 90 Z"/>
+    <!-- Inner lines: cells are 68 units. -->
+    <g stroke-width="10">
+      <path d="M155 90 Q158 256 154 425"/>
+      <path d="M223 89 Q221 256 224 427"/>
+      <path d="M291 88 Q294 256 290 428"/>
+      <path d="M358 88 Q356 256 359 426"/>
+      <path d="M88 157 Q256 160 426 155"/>
+      <path d="M87 225 Q256 222 426 226"/>
+      <path d="M86 292 Q256 295 425 290"/>
+      <path d="M87 359 Q256 357 425 360"/>
+    </g>
+  </g>
+  <!-- One scribbled cross-off in brand red, a little bigger than its square. -->
+  <g fill="none" stroke="#a8141b" stroke-linecap="round" stroke-linejoin="round">
+    <path stroke-width="24" d="M200 206 Q258 252 314 314"/>
+    <path stroke-width="12" d="M318 296 Q270 250 220 200"/>
+    <path stroke-width="24" d="M312 202 Q254 256 202 316"/>
+    <path stroke-width="12" d="M220 318 Q266 266 318 222"/>
+  </g>
+</svg>
