@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect } from "react";
+import { track } from "@/lib/analytics";
 import type { Media } from "@/lib/game/types";
 import { getDefaultUploadQueue } from "@/lib/media/defaultUploadQueue";
 import type { UploadQueue } from "@/lib/media/uploadQueue";
+
+/** Upload items already counted for analytics (module-wide: an effect re-run must not re-send). */
+const trackedUploads = new Set<string>();
 
 /**
  * Folds each finished upload's `register_media` row for this game into the
@@ -21,6 +25,10 @@ export function useUploadedMedia(gameId: string, applyMedia: (row: Media) => voi
         if (item.state !== "done" || !item.media || item.gameId !== gameId || applied.has(item.id)) continue;
         applied.add(item.id);
         applyMedia(item.media);
+        if (!trackedUploads.has(item.id)) {
+          trackedUploads.add(item.id);
+          track("media_uploaded", { kind: item.media.kind });
+        }
       }
     };
     sync();

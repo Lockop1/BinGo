@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { track } from "@/lib/analytics";
 import { deriveBoard, type DisplaySquare } from "@/lib/game/boardState";
 import {
   createPendingActions,
@@ -30,6 +31,14 @@ export function runPendingAction(action: PendingAction): Promise<SquareResult> {
     case "undo":
       return undoCompletion(args);
   }
+}
+
+/** `square_completed` analytics when this phone's complete / +1 crossed the square off (counts only). */
+function trackCompletion(settled: Settled, squares: readonly Square[]) {
+  const { action, outcome, row } = settled;
+  if (outcome !== "applied" || action.kind === "undo" || !row || row.completed_at === null) return;
+  const done = squares.filter((s) => (s.position === row.position ? row : s).completed_at !== null).length;
+  track("square_completed", { counter: row.target_count > 1, total_completed: done });
 }
 
 /** One queue per game (per tab), so nothing held for one game can leak into another. */
@@ -140,6 +149,7 @@ export function useBoardState(
         if (settled.action.gameId !== gameId) return;
         const { applySquare, refresh, onSettled } = optionsRef.current;
         if (settled.row) applySquare?.(settled.row);
+        trackCompletion(settled, squaresRef.current);
         if (settled.outcome === "failed") void refresh?.();
         onSettled?.(settled);
       }),

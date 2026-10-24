@@ -26,6 +26,19 @@ build plan is in [`PHASES.md`](./PHASES.md).
 Schema changes go through Supabase CLI migrations in `supabase/migrations/` (see
 `CLAUDE.md`).
 
+## Analytics
+
+Optional, privacy-first product analytics via PostHog (`src/lib/analytics.ts`). It is off
+unless `NEXT_PUBLIC_POSTHOG_KEY` is set (`NEXT_PUBLIC_POSTHOG_HOST` defaults to
+`https://us.i.posthog.com`), and off for browsers sending Do Not Track or Global Privacy
+Control; when off, `posthog-js` is never loaded. Only eight events with allow-listed counts
+and flags are sent (`game_created`, `player_joined`, `game_started`, `square_completed`,
+`media_uploaded`, `game_ended`, `recap_viewed`, `play_again`). No names, join codes, game or
+user ids, square text, URLs or referrers; no autocapture, pageviews, session recording,
+surveys, cookies or stored identifiers (a fresh anonymous id per page load).
+`e2e/analytics.spec.ts` checks the payloads; it is skipped unless the dev server and Playwright
+both run with `NEXT_PUBLIC_POSTHOG_KEY=phc_test NEXT_PUBLIC_POSTHOG_HOST=http://127.0.0.1:<port>/__ph`.
+
 ## Developing locally
 
 Without a hosted Supabase project you can run against the local stand-in backend

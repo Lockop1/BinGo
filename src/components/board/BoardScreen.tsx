@@ -9,6 +9,7 @@ import { SettingsSheetBody } from "@/components/board/SettingsSheet";
 import { SquareSheetBody, squareTitle } from "@/components/board/SquareSheet";
 import { TopBar } from "@/components/board/TopBar";
 import { RecapStory } from "@/components/recap/RecapStory";
+import { track } from "@/lib/analytics";
 import { buildRecapItems, recapFileNames, type RecapItem } from "@/components/recap/recapItems";
 import { Sheet } from "@/components/ui/Sheet";
 import { goHomeOnPurpose } from "@/lib/game/activeGame";
@@ -253,7 +254,9 @@ export function BoardScreen({
     setEndError(null);
     try {
       // Status becomes ended: GameScreen swaps the board for the recap.
-      applyGame(await endGame({ game_id: game.id }));
+      const ended = await endGame({ game_id: game.id });
+      track("game_ended", endedProps(board, players.length, ended));
+      applyGame(ended);
     } catch (error) {
       setEndError(errorCopy(error));
       void refresh();
@@ -413,6 +416,21 @@ export function BoardScreen({
       ) : null}
     </main>
   );
+}
+
+/** `game_ended` analytics: counts only (see lib/analytics.ts). */
+function endedProps(board: DisplaySquare[], playerCount: number, game: Game) {
+  const started = game.started_at ? Date.parse(game.started_at) : NaN;
+  const ended = game.ended_at ? Date.parse(game.ended_at) : Date.now();
+  const minutes = (ended - started) / 60_000;
+  return {
+    squares_completed: board.filter((s) => s.completed_at !== null).length,
+    lines: completedLines(board).length,
+    blackout: isBlackout(board),
+    duration_min: Number.isFinite(minutes) ? Math.max(0, Math.round(minutes)) : 0,
+    player_count: playerCount,
+    by: "host",
+  };
 }
 
 const NO_CELLS: readonly number[] = [];

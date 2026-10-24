@@ -8,6 +8,7 @@ import { useSession } from "@/components/providers/SessionProvider";
 import { PencilButton } from "@/components/ui/PencilButton";
 import { SkeletonLines } from "@/components/ui/Skeleton";
 import { TextField } from "@/components/ui/TextField";
+import { track } from "@/lib/analytics";
 import { GameError, errorCopy, toGameError } from "@/lib/game/errors";
 import { normalizeJoinCode } from "@/lib/game/links";
 import { joinGame, peekGame } from "@/lib/game/rpc";
@@ -156,6 +157,8 @@ function JoinForm({ code, preview }: { code: string; preview: GamePreview }) {
     try {
       const player = await joinGame({ code, display_name: displayName });
       saveDisplayName(displayName);
+      // Members never reach this form (they go straight in), so this is a new player.
+      track("player_joined", { late_join: preview.status === "active" });
       // Clear busy in the same transition as the navigation, so the button never flashes back
       // to "Join" here, and a restored copy of this screen is never stuck on "Joining…".
       submitting.current = false;

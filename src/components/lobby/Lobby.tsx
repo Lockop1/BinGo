@@ -11,6 +11,7 @@ import { SquareEditor } from "@/components/lobby/SquareEditor";
 import { toSquareInput, type SquareFields } from "@/components/lobby/squareFields";
 import { Sheet } from "@/components/ui/Sheet";
 import { Toggle } from "@/components/ui/Toggle";
+import { track } from "@/lib/analytics";
 import { errorCopy, toGameError } from "@/lib/game/errors";
 import { removePlayer, setFreeCenter, setReady, startGame, updateSquare } from "@/lib/game/rpc";
 import { BOARD_SIZE, CENTER_POSITION, type Game, type Player, type Square } from "@/lib/game/types";
@@ -164,7 +165,13 @@ export function Lobby({
     setDockError(null);
     try {
       // Status becomes active: GameScreen leaves the lobby.
-      applyGame(await startGame({ game_id: game.id }));
+      const started = await startGame({ game_id: game.id });
+      // Only the host gets here (start_game is host-only).
+      track("game_started", {
+        player_count: players.length,
+        counter_squares: squares.filter((s) => s.target_count > 1).length,
+      });
+      applyGame(started);
     } catch (error) {
       setDockError(failed(error));
       setStartBusy(false);

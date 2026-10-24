@@ -7,6 +7,7 @@ import { PackPicker } from "@/components/create/PackPicker";
 import { PencilButton } from "@/components/ui/PencilButton";
 import { TextField } from "@/components/ui/TextField";
 import { getPack, packToSquares, type PackId } from "@/content/packs";
+import { track } from "@/lib/analytics";
 import { errorCopy } from "@/lib/game/errors";
 import { createGame } from "@/lib/game/rpc";
 import {
@@ -50,6 +51,7 @@ export function CreateGameForm() {
         squares: packToSquares(getPack(packId)),
       });
       saveDisplayName(host);
+      track("game_created", { pack: packId, free_center: freeCenter });
       // Stay "submitting" while the next screen loads so a second tap does nothing.
       router.replace(`/game/${game.id}`);
     } catch (err) {
