@@ -315,7 +315,7 @@ The green e2e result needs to be taken with care: the first run went against a *
 
 ## Resolution
 
-Status of every finding above after the follow-up work. "Fixed in 0e6beed" is the committed Major-fix pass; "fixed in working tree" is the final polish pass (not committed yet). Gates after the polish pass: `npm run lint` clean, `npm run build` OK, `npm run test` 23 files / 314 tests, `npm run e2e` 20/20 against a drift-free `bingo_local`.
+Status of every finding above after the follow-up work. "Fixed in 0e6beed" is the committed Major-fix pass; "fixed in working tree" is the final polish pass (committed as fe74509). Gates after the polish pass: `npm run lint` clean, `npm run build` OK, `npm run test` 23 files / 314 tests, `npm run e2e` 20/20 against a drift-free `bingo_local`.
 
 ### Section 2 findings
 
