@@ -10,7 +10,9 @@ const QUIET_MS = 300;
 /**
  * Renders `children` only once an anonymous session exists. For the first
  * ~300ms it renders nothing (most loads finish here), then a quiet
- * "Connecting…" line; if sign-in fails (e.g. offline) it offers a retry.
+ * "Connecting…" line; if sign-in fails (e.g. offline) it offers a retry. When
+ * the phone still has its identity and only the refresh failed, the copy says
+ * so (nothing is lost) while SessionProvider keeps retrying on its own.
  */
 export function SessionGate({ children }: { children: ReactNode }) {
   const session = useSession();
@@ -18,8 +20,12 @@ export function SessionGate({ children }: { children: ReactNode }) {
   if (session.status === "ready") return <>{children}</>;
   if (session.status === "error") {
     return (
-      <div role="alert" className="flex flex-col items-start gap-3 py-2">
-        <p className="text-lg text-ink-soft">Couldn&apos;t connect. Check your signal and try again.</p>
+      <div role="alert" className="flex flex-col items-start gap-3 py-2" data-testid="session-error">
+        <p className="text-lg text-ink-soft">
+          {session.reconnecting
+            ? "Couldn’t reconnect — your game is still here. Retrying…"
+            : "Couldn’t connect. Check your signal and try again."}
+        </p>
         <PencilButton variant="secondary" onClick={session.retry}>
           Try again
         </PencilButton>

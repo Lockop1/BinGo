@@ -30,24 +30,40 @@ Schema changes go through Supabase CLI migrations in `supabase/migrations/` (see
 
 Without a hosted Supabase project you can run against the local stand-in backend
 (real Auth + PostgREST; Storage returns 501 and Realtime never emits events, so other
-players' changes need a refresh). See `scripts/local-backend/README.md`.
+players' changes arrive through the resync poll, every 15 s by default or
+`NEXT_PUBLIC_SYNC_POLL_MS`). See `scripts/local-backend/README.md`.
 
 ```bash
 npm run backend:status          # or: npm run backend:reset && npm run backend:start
 npm run backend:env > .env.local
-npm run dev
+npm run dev                     # NEXT_PUBLIC_ENABLE_SW=1 npm run dev to run the service worker too
 ```
+
+If Turbopack serves stale files in dev, `rm -rf .next/dev` and restart.
 
 Tests:
 
-- `npm run test` — Vitest unit tests (starter-pack content rules, palette contrast).
-- `npm run e2e` — Playwright (Chromium, 375×812): two browser contexts create and join a
-  game. Starts `npm run dev` on `127.0.0.1:3000` or reuses one already running.
+- `npm run test` — Vitest unit tests (`src/**/*.test.ts`): game reducers, optimistic queue,
+  board state, celebrations, toasts, instant return, settings, media pipeline, service-worker
+  policy, session handling, cleanup cron, starter-pack content rules, palette contrast.
+- `npm run e2e` — Playwright (Chromium, 375×812): create / join, lobby, live board (incl.
+  offline), instant return, settings, media, PWA. Starts `npm run dev` on `127.0.0.1:3000`
+  (with `NEXT_PUBLIC_SYNC_POLL_MS=1500`, `NEXT_PUBLIC_ENABLE_SW=1`) or reuses one already running.
+- `npm run db:test` — the SQL suite (RLS, RPCs, grants) against a local Postgres 16+ at
+  `127.0.0.1:54329`; see `CLAUDE.md` > Running the DB tests.
 
 ## Scripts
 
 - `npm run dev` — dev server (Turbopack)
 - `npm run build` — production build
+- `npm run start` — serve the production build
 - `npm run lint` — ESLint
 - `npm run test` — unit tests (Vitest)
 - `npm run e2e` — end-to-end tests (Playwright)
+- `npm run db:test` — database tests (`scripts/db-test.sh`)
+- `npm run backend:reset` / `backend:migrate` — recreate the local backend database / apply
+  pending migrations
+- `npm run backend:start` / `backend:stop` / `backend:status` — run (detached), stop or check
+  the local backend
+- `npm run backend:env` — print the `.env.local` lines for the local backend
+- `npm run backend:smoke` — end-to-end check of the local backend with supabase-js

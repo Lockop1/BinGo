@@ -388,3 +388,67 @@ compiler's printer, 2-space indent) and keep the header comment.
   `extensions`), so migrations must not rely on pgcrypto. Never apply the shim or `test_helpers.sql`
   to a real project. A green suite is necessary but not sufficient: after `npx supabase db push`,
   smoke-test create/join/complete/upload against the real project.
+
+## Client architecture
+
+- **`src/components/`**: `home` (home page, `YourGames`, `InstantReturn`), `create` (form + pack
+  picker), `join` (`/g/[code]`), `lobby` (paper lobby: board, `SquareEditor`, dock, invite, `SyncDot`),
+  `game` (`GameScreen` routes lobby / board / recap by status, `StartTransition`), `board` (live
+  board: `BoardScreen`, `TopBar`, grid, sheets, toasts, `Celebration`), `media` (add/share buttons,
+  strip, `useUploadedMedia`), `recap` (summary, story viewer, save / zip), `pwa` (SW registration),
+  `ui` (buttons, sheet, fields), `paper` (`PaperPage`), `providers` (`SessionProvider`, `SessionGate`).
+- **Identity** (`lib/supabase/auth.ts`): `ensureSession()` (deduped) returns the stored session, signs
+  in anonymously only when nothing is stored or the server says the refresh token is dead
+  (`classifyRefreshError` = `definitive`, logged once). Any other refresh failure throws
+  `SessionReconnectError` and keeps the identity; `SessionProvider` shows "Couldn't reconnect…" and
+  retries (`retryDelayMs` backoff + `online`). If auth-js wipes the cookie after a non-final error, the
+  keeper asks the same identity back via `refreshSession({ refresh_token })` from its remembered token.
+- **Data / sync** (`lib/game/useGame.ts`): parallel selects of `games`/`players`/`squares`/`media`
+  (`fetchGameSnapshot`), then one Realtime channel per game (`subscribeToGame`, `postgres_changes` on
+  all four tables) plus a full resync on channel `SUBSCRIBED`, tab visible, `online` and a poll every
+  `syncPollMs()` (`NEXT_PUBLIC_SYNC_POLL_MS`, default 15 s; 60 s once ended). Events and fetches merge
+  through the pure reducers in `realtime.ts` (`applySquareChange`, `mergeSnapshot`, …), which drop any
+  square older than the held row by `updated_at` (`isNewerSquare`, µs precision). `syncState`:
+  `live` | `syncing` (a resync > 400 ms, or the cached snapshot awaiting its first answer) | `offline`.
+- **Optimistic layer**: taps go into `pendingActions.ts` (one queue per game, persisted to
+  `bingo.pending.<gameId>`): one action at a time per square, squares in parallel, only while online,
+  exponential backoff (≤ 30 s) on `unknown` / `not_authenticated`, any other error code is final
+  (game-over codes drop the whole queue; ≤ 50 items). `boardState.ts` derives the board as base (newer of
+  server row and this phone's last RPC result) + unsettled overlays in tap order, so refetches never
+  flip a pending cross-off back; a settled `square_result` row always wins (`applied = false` just
+  adopts it). `useBoardState` wires the queue to the RPCs and folds rows back via `applySquare`.
+- **Feedback**: `diffBoards` events → `toasts.ts` (one toast at a time, 2.5 s, ≤ 4 waiting; also
+  `mediaToasts`; `GameScreen` shows `droppedNotices` for given-up taps), `celebrations.ts` (each line / blackout once per phone, remembered in
+  `bingo.celebrated.<gameId>`; highlight → overlay → host blackout prompt), `lib/haptics.ts`
+  (`pulse` on own cross-off / start, `doublePulse` on bingo; no-op where `navigator.vibrate` is missing).
+- **Settings** (`lib/settings`): `bingo.settings` = `{ theme, textSize, squareSize }`, validated per
+  field; `theme: null` follows `prefers-color-scheme`. `BoardScreen` sets `data-theme` /
+  `data-text-size` / `data-square-size`; the CSS tokens live in `globals.css`.
+- **Instant return** (`lib/game/activeGame.ts`): `bingo.activeGame` holds the last lobby / active game
+  with a full snapshot (board draws before the session or network answers); `bingo.lastEnded` sends the
+  next open to the recap once (24 h). `/` decides client-side (`InstantReturn` + `HOME_GUARD_SCRIPT`,
+  never a server redirect, so it works from the SW cache); `?stay=1` or the per-tab sessionStorage
+  flag `bingo.stayHome` (Leave / Home links) keeps home. The record clears on end, not-found and Leave.
+- **Media**: `prepareMedia` (photo → JPEG ≤ 1600 px; video ≤ 15 s / 50 MB) → `uploadQueue` (in memory
+  only, one item at a time, `<game_id>/<position>/<uuid>.<ext>`, `upsert: false`, 3 tries, then
+  `register_media`; wired in `defaultUploadQueue.ts`) → `applyMedia`. Display only through
+  `signedUrls.ts` (1 h URLs, batches of 50, cached, re-signed 5 min before expiry). The recap
+  (`components/recap`) builds items in board order, saves per item (share sheet / download) or zips all.
+- **PWA**: `public/sw.js` + pure `public/sw-policy.js` (unit-tested in `lib/pwa/swPolicy.test.ts`):
+  only the app shell is cached (navigations network-first with a 3 s fallback, hashed `/_next/static`
+  cache-first, icons / fonts / manifest stale-while-revalidate); Supabase, `/api`, RSC and non-GET
+  never. Bump `CACHE_VERSION` when rules or layout change. Registered in production, or in dev with
+  `NEXT_PUBLIC_ENABLE_SW=1` (the e2e sets it), as `/sw.js?supabase=<origin>[&dev=1]`.
+- **Browser storage keys** (all through `lib/storage/local.ts`, never throwing): `bingo.displayName`,
+  `bingo.settings`, `bingo.activeGame`, `bingo.lastEnded`, `bingo.pending.<gameId>`,
+  `bingo.celebrated.<gameId>`; sessionStorage `bingo.stayHome`; auth lives in @supabase/ssr cookies
+  `sb-<ref>-auth-token[.N]`.
+- **Tests**: `npm run test` (Vitest, `src/**/*.test.ts`, node env), `npm run e2e` (Playwright,
+  Chromium 375×812, starts or reuses `next dev` on :3000 with `NEXT_PUBLIC_SYNC_POLL_MS=1500`),
+  `npm run db:test` (SQL suite, see above), `npm run backend:{reset,migrate,start,stop,status,env,smoke}`
+  (local stand-in backend, `scripts/local-backend/README.md`). `/dev/media-lab` is a dev-only page
+  (404 in production) that runs the real image/video pipeline and the recap on fake data
+  (`e2e/media.spec.ts`).
+- **Known limitation (local backend)**: real GoTrue + PostgREST, but Realtime never emits events
+  (cross-phone changes arrive via the resync poll) and Storage is a stub that returns 501 (e2e calls
+  `register_media` through `rpcAs`). Realtime and uploads are only exercised against a real project.
