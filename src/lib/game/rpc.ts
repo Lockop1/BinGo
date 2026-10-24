@@ -105,7 +105,14 @@ export async function completeSquare(args: Args<"complete_square">): Promise<Squ
   return asSquareResult(await call((sb) => sb.rpc("complete_square", args)));
 }
 
-export async function incrementSquare(args: Args<"increment_square">): Promise<SquareResult> {
+/**
+ * Counter +1. `actionId` (the queued tap's client id, a UUID) makes the call
+ * idempotent: a retry with the same id never counts twice, while different
+ * taps always all count. `null` increments without that protection.
+ */
+export async function incrementSquare(gameId: string, position: number, actionId: string | null): Promise<SquareResult> {
+  const args: Args<"increment_square"> = { game_id: gameId, position };
+  if (actionId !== null) args.action_id = actionId;
   return asSquareResult(await call((sb) => sb.rpc("increment_square", args)));
 }
 
@@ -115,6 +122,18 @@ export async function undoCompletion(args: Args<"undo_completion">): Promise<Squ
 
 export function endGame(args: Args<"end_game">): Promise<Game> {
   return call((sb) => sb.rpc("end_game", args));
+}
+
+/** A non-host player leaves the lobby (their player row is deleted). Resolves true. */
+export function leaveGame(gameId: string): Promise<boolean> {
+  const args: Args<"leave_game"> = { game_id: gameId };
+  return call((sb) => sb.rpc("leave_game", args));
+}
+
+/** Host only, lobby only: removes another player. Resolves true. */
+export function removePlayer(gameId: string, playerId: string): Promise<boolean> {
+  const args: Args<"remove_player"> = { game_id: gameId, player_id: playerId };
+  return call((sb) => sb.rpc("remove_player", args));
 }
 
 export function registerMedia(

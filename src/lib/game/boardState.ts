@@ -11,7 +11,10 @@ import type { Square } from "@/lib/game/types";
  *    replaces it.
  * 2. Overlays: this phone's unsettled actions for the square, applied in tap
  *    order on top of the base. A refetch that still shows the square open
- *    therefore never flips a pending completion back.
+ *    therefore never flips a pending completion back. A counter shows
+ *    `base.current_count + pending +1s` (capped at the target): the server
+ *    counts every tap once, so nothing is predicted from the count this phone
+ *    saw when tapping.
  *
  * Only predictions: the RPC result always wins once it arrives.
  */
@@ -49,8 +52,7 @@ function applyAction(shown: Shown, action: PendingAction, target: number): Shown
       return { completed_by_player_id: action.playerId, completed_at: action.createdAt, current_count: target };
     case "increment": {
       if (shown.completed_at !== null || target <= 1) return shown;
-      const expected = action.expectedCount ?? shown.current_count;
-      const count = Math.min(target, Math.max(shown.current_count, expected + 1));
+      const count = Math.min(target, shown.current_count + 1);
       if (count === shown.current_count) return shown;
       return count >= target
         ? { completed_by_player_id: action.playerId, completed_at: action.createdAt, current_count: count }

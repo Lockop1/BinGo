@@ -14,10 +14,16 @@ import { readLocal, removeLocal, writeLocal } from "@/lib/storage/local";
  *   order), squares in parallel, only while the browser says it is online.
  *   Network / unknown failures retry with exponential backoff (max ~30 s);
  *   `resume` (on `online` / tab visible) retries right away.
+ * - Every action has a client id (a UUID). A counter +1 sends it as
+ *   `increment_square`'s `action_id`, so the server counts each tap exactly
+ *   once: a retry of a tap that already landed (lost response, reload) is
+ *   recognised, while taps from different phones, or offline ones sent
+ *   later, all count. Nothing is compared against the count this phone saw.
  * - Settling an action stores the returned `square_result` row as the
  *   authoritative view of that square (so there is no flash between "pending"
  *   and the refetched row) and drops the overlay. `applied = false` is not an
- *   error: the returned row (e.g. someone else got it first) simply wins.
+ *   error: the returned row (e.g. someone else got it first; for a +1, this
+ *   tap was already counted or the square was already complete) simply wins.
  *   A definitive game error (`game_not_active`, `not_allowed`, …) drops the
  *   action and is reported once.
  * - The game is over (`game_not_active` / `game_not_found`): the server will
@@ -36,15 +42,16 @@ import { readLocal, removeLocal, writeLocal } from "@/lib/storage/local";
 export type PendingKind = "complete" | "increment" | "undo";
 
 export type PendingAction = {
-  /** Client-generated id of this action. */
+  /**
+   * Client-generated id of this action (a UUID from `newActionId`). Kept
+   * across retries and reloads; a +1 sends it as `action_id`.
+   */
   clientId: string;
   kind: PendingKind;
   gameId: string;
   position: number;
   /** The acting player (this phone's player row), shown as the predicted completer. */
   playerId: string;
-  /** increment: the count shown when +1 was tapped (sent as `expected_count`). */
-  expectedCount?: number;
   /** undo: the completer shown when Undo was tapped (null: unknown). */
   expectedCompleter?: string | null;
   /**
@@ -66,7 +73,6 @@ export type EnqueueInput = {
   gameId: string;
   position: number;
   playerId: string;
-  expectedCount?: number;
   expectedCompleter?: string | null;
   clientId?: string;
 };
@@ -184,7 +190,11 @@ export function backoffMs(
 
 const KINDS = new Set<PendingKind>(["complete", "increment", "undo"]);
 
-/** Shape check for restored items (persistence may hold anything). */
+/**
+ * Shape check for restored items (persistence may hold anything). Items saved
+ * before +1s carried action ids may still have an `expectedCount`: it is
+ * ignored (and stripped on restore), the item stays valid.
+ */
 export function isPendingAction(value: unknown): value is PendingAction {
   if (!value || typeof value !== "object") return false;
   const a = value as Record<string, unknown>;
@@ -198,7 +208,6 @@ export function isPendingAction(value: unknown): value is PendingAction {
     typeof a.playerId === "string" &&
     typeof a.createdAt === "string" &&
     typeof a.attempts === "number" &&
-    (a.expectedCount === undefined || typeof a.expectedCount === "number") &&
     (a.expectedCompleter === undefined || a.expectedCompleter === null || typeof a.expectedCompleter === "string") &&
     (a.afterClientId === undefined || typeof a.afterClientId === "string")
   );
@@ -248,13 +257,38 @@ function defaultIsOnline(): boolean {
   return typeof navigator === "undefined" || navigator.onLine !== false;
 }
 
-function defaultId(): string {
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True for a UUID, i.e. a client id the server accepts as `action_id`. */
+export function isActionId(id: string): boolean {
+  return UUID.test(id);
+}
+
+/** Formats 16 random bytes as an RFC 4122 version 4 UUID. */
+export function uuidFromBytes(bytes: Uint8Array): string {
+  const b = Uint8Array.from(bytes.subarray(0, 16));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const hex = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+/**
+ * A fresh action id: always a v4 UUID (the server's `action_id` is a uuid
+ * column; anything else would be rejected on every retry). `randomUUID` is
+ * missing in insecure contexts (plain http on a LAN address), where
+ * `getRandomValues` still works.
+ */
+export function newActionId(): string {
   try {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    if (typeof crypto !== "undefined") {
+      if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+      if (typeof crypto.getRandomValues === "function") return uuidFromBytes(crypto.getRandomValues(new Uint8Array(16)));
+    }
   } catch {
-    // Insecure context: fall through.
+    // Fall through to Math.random.
   }
-  return `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return uuidFromBytes(Uint8Array.from({ length: 16 }, () => Math.floor(Math.random() * 256)));
 }
 
 /** Strip the `applied` flag: what is left is a plain squares row. */
@@ -283,7 +317,7 @@ export function createPendingActions(options: PendingOptions): PendingStore {
     isOnline = defaultIsOnline,
     now = Date.now,
     random = Math.random,
-    createId = defaultId,
+    createId = newActionId,
     baseBackoffMs = BASE_BACKOFF_MS,
     maxBackoffMs = MAX_BACKOFF_MS,
     maxActions = MAX_PENDING_ACTIONS,
@@ -303,9 +337,10 @@ export function createPendingActions(options: PendingOptions): PendingStore {
   const restored = loaded
     .filter(isPendingAction)
     .map((a) => {
-      const copy = { ...a };
+      const copy: PendingAction & { expectedCount?: unknown } = { ...a };
       delete copy.nextAttemptAt;
-      return copy;
+      delete copy.expectedCount; // saved before +1s carried action ids
+      return copy as PendingAction;
     })
     .slice(-Math.max(1, maxActions));
 
@@ -354,13 +389,10 @@ export function createPendingActions(options: PendingOptions): PendingStore {
     const forSquare = state.actions.filter((a) => keyOf(a) === key);
     const last = forSquare[forSquare.length - 1];
 
-    // (f) The same intent is already waiting: ignore the repeat tap.
+    // (f) The same intent is already waiting: ignore the repeat tap. (Every +1
+    // is its own tap with its own id, so increments are never duplicates.)
     if (input.kind === "complete" && last?.kind === "complete") return { status: "duplicate", clientId: last.clientId };
     if (input.kind === "undo" && last?.kind === "undo") return { status: "duplicate", clientId: last.clientId };
-    if (input.kind === "increment") {
-      const same = forSquare.find((a) => a.kind === "increment" && a.expectedCount === input.expectedCount);
-      if (same) return { status: "duplicate", clientId: same.clientId };
-    }
 
     // (g) Undo of a completion that never left the phone: drop both locally.
     if (input.kind === "undo" && last?.kind === "complete" && isUnsent(last)) return cancel(last, key);
@@ -383,7 +415,6 @@ export function createPendingActions(options: PendingOptions): PendingStore {
       createdAt: new Date(now()).toISOString(),
       attempts: 0,
     };
-    if (input.kind === "increment" && input.expectedCount !== undefined) action.expectedCount = input.expectedCount;
     if (input.kind === "undo") {
       action.expectedCompleter = input.expectedCompleter ?? null;
       // Something on this square is still in the air: decide once it lands.

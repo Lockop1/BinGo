@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "r
 import { deriveBoard, type DisplaySquare } from "@/lib/game/boardState";
 import {
   createPendingActions,
+  isActionId,
   localPersistence,
   squareKey,
   type DroppedAction,
@@ -15,15 +16,17 @@ import {
 import { completeSquare, incrementSquare, undoCompletion } from "@/lib/game/rpc";
 import type { Player, Square, SquareResult } from "@/lib/game/types";
 
-function runPendingAction(action: PendingAction): Promise<SquareResult> {
+/** Sends one queued action through its RPC (exported for the queue's unit tests). */
+export function runPendingAction(action: PendingAction): Promise<SquareResult> {
   const args = { game_id: action.gameId, position: action.position };
   switch (action.kind) {
     case "complete":
       return completeSquare(args);
     case "increment":
-      return incrementSquare(
-        action.expectedCount === undefined ? args : { ...args, expected_count: action.expectedCount },
-      );
+      // The tap's client id makes the +1 idempotent (retries never double count). An id
+      // that is not a UUID could only come from a queue saved by an older build; the server
+      // would reject it on every retry, so that one +1 goes without the protection.
+      return incrementSquare(action.gameId, action.position, isActionId(action.clientId) ? action.clientId : null);
     case "undo":
       return undoCompletion(args);
   }
@@ -96,7 +99,7 @@ export type BoardState = {
   /** The 25 displayed squares (server + this phone's pending overlays), by position. */
   board: DisplaySquare[];
   complete: (position: number) => void;
-  /** +1 on a counter square, sending the count currently shown as `expected_count`. */
+  /** +1 on a counter square: one queued action (its client id is the RPC's `action_id`). */
   increment: (position: number) => void;
   undo: (position: number) => void;
   /** The last settled action for a square (sheet copy: "Jake got it first", errors). */
@@ -169,7 +172,7 @@ export function useBoardState(
     (position: number) => {
       const square = shown(position);
       if (!meId || !square || square.completed_at !== null || square.target_count <= 1) return;
-      store.enqueue({ kind: "increment", gameId, position, playerId: meId, expectedCount: square.current_count });
+      store.enqueue({ kind: "increment", gameId, position, playerId: meId });
     },
     [store, gameId, meId, shown],
   );

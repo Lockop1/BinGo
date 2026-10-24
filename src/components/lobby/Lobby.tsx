@@ -12,7 +12,7 @@ import { toSquareInput, type SquareFields } from "@/components/lobby/squareField
 import { Sheet } from "@/components/ui/Sheet";
 import { Toggle } from "@/components/ui/Toggle";
 import { errorCopy, toGameError } from "@/lib/game/errors";
-import { setFreeCenter, setReady, startGame, updateSquare } from "@/lib/game/rpc";
+import { removePlayer, setFreeCenter, setReady, startGame, updateSquare } from "@/lib/game/rpc";
 import { BOARD_SIZE, CENTER_POSITION, type Game, type Player, type Square } from "@/lib/game/types";
 import type { SyncState } from "@/lib/game/useGame";
 
@@ -30,16 +30,36 @@ export type LobbyProps = {
 
 type Overlay<T> = { value: T; seq: number };
 type Editing = { position: number; key: number; draft?: SquareFields; error?: string };
+/** A player the host removed: hidden at once (`pending`), confirmed by the RPC (`done`). */
+type Removal = "pending" | "done";
 
 /**
  * The paper lobby: invite, players, the board everyone edits, Ready and
- * (host) Start. All changes go through the RPCs; this phone shows its own
- * change immediately (optimistic overlay) and then adopts the returned row.
+ * (host) Start / remove a player / End game; everyone else can Leave. All
+ * changes go through the RPCs; this phone shows its own change immediately
+ * (optimistic overlay) and then adopts the returned row.
  */
-export function Lobby({ game, players, squares, me, syncState, refresh, applyGame, applyPlayer, applySquare }: LobbyProps) {
+export function Lobby({
+  game,
+  players: serverPlayers,
+  squares,
+  me,
+  syncState,
+  refresh,
+  applyGame,
+  applyPlayer,
+  applySquare,
+}: LobbyProps) {
   const isHost = me !== null && me.user_id === game.host_user_id;
-  const host = players.find((p) => p.user_id === game.host_user_id) ?? null;
+  const host = serverPlayers.find((p) => p.user_id === game.host_user_id) ?? null;
   const hostName = host?.display_name ?? "";
+
+  // Removed players vanish from this phone at once; a removed player can only
+  // come back as a new row (rejoining), so their old id stays hidden for good.
+  const [removals, setRemovals] = useState<Readonly<Record<string, Removal>>>({});
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const players = useMemo(() => serverPlayers.filter((p) => !(p.id in removals)), [serverPlayers, removals]);
+  const removalPending = Object.values(removals).includes("pending");
 
   const seq = useRef(0);
   const [readyOverlay, setReadyOverlay] = useState<Overlay<boolean> | null>(null);
@@ -62,8 +82,9 @@ export function Lobby({ game, players, squares, me, syncState, refresh, applyGam
   const freeCenter = freeOverlay?.value ?? game.free_center;
   const myReady = readyOverlay?.value ?? me?.is_ready ?? false;
   const readyCount = players.filter((p) => (p.id === me?.id ? myReady : p.is_ready)).length;
-  // Start uses server-confirmed state only (an in-flight Ready has not landed yet).
-  const allReady = players.length > 0 && players.every((p) => p.is_ready) && readyOverlay === null;
+  // Start uses server-confirmed state only (an in-flight Ready or removal has not landed yet;
+  // a removal the RPC confirmed counts even before the next resync drops the row).
+  const allReady = players.length > 0 && players.every((p) => p.is_ready) && readyOverlay === null && !removalPending;
 
   const board: BoardSquare[] = useMemo(() => {
     const byPosition = new Map(squares.map((s) => [s.position, s]));
@@ -114,6 +135,28 @@ export function Lobby({ game, players, squares, me, syncState, refresh, applyGam
     } finally {
       setFreeOverlay((o) => (o?.seq === id ? null : o));
     }
+  };
+
+  const remove = async (player: Player) => {
+    setRemoveError(null);
+    setRemovals((r) => ({ ...r, [player.id]: "pending" }));
+    try {
+      await removePlayer(game.id, player.id);
+    } catch (error) {
+      // Already gone (they left, or another tap removed them): same outcome.
+      if (toGameError(error).code !== "player_not_found") {
+        setRemovals((r) => {
+          const next = { ...r };
+          delete next[player.id];
+          return next;
+        });
+        setRemoveError(failed(error));
+        return;
+      }
+    }
+    setRemovals((r) => ({ ...r, [player.id]: "done" }));
+    // Reconcile with the server's list (Realtime may never tell us).
+    void refresh();
   };
 
   const start = async () => {
@@ -168,13 +211,22 @@ export function Lobby({ game, players, squares, me, syncState, refresh, applyGam
 
   return (
     <div className="flex min-w-0 flex-col" data-testid="lobby">
-      <LobbyHeader gameId={game.id} name={game.name} syncState={syncState} onResync={() => void refresh()} />
+      <LobbyHeader
+        gameId={game.id}
+        name={game.name}
+        isHost={isHost}
+        syncState={syncState}
+        onResync={() => void refresh()}
+        applyGame={applyGame}
+      />
       <InviteBlock code={game.join_code} gameName={game.name} />
       <PlayerList
         players={players}
         meId={me?.id ?? null}
         hostUserId={game.host_user_id}
         readyOverride={readyOverlay?.value ?? null}
+        onRemove={isHost ? (player) => void remove(player) : undefined}
+        removeError={removeError}
       />
 
       {isHost ? (

@@ -7,11 +7,11 @@ import { StartTransition, type StartSquare } from "@/components/game/StartTransi
 import { NotFound } from "@/components/join/JoinScreen";
 import { Lobby } from "@/components/lobby/Lobby";
 import { useUploadedMedia } from "@/components/media/useUploadedMedia";
-import { PaperPage } from "@/components/paper/PaperPage";
+import { PaperPage, PaperTitle } from "@/components/paper/PaperPage";
 import { SessionGate } from "@/components/providers/SessionGate";
 import { useSession } from "@/components/providers/SessionProvider";
 import { Recap } from "@/components/recap/Recap";
-import { PencilButton, PencilLink } from "@/components/ui/PencilButton";
+import { PencilButton, PencilLink, pencilButtonClass } from "@/components/ui/PencilButton";
 import { SkeletonLines } from "@/components/ui/Skeleton";
 import {
   SAVE_DEBOUNCE_MS,
@@ -52,7 +52,8 @@ import { useSettings } from "@/lib/settings/useSettings";
  * the board from that snapshot at once (even before the session check or the
  * network) and the fetch then reconciles. The record clears when the game
  * ends (the next open of `/` then lands on the recap once), when the server
- * says the game is gone, and on Leave.
+ * says the game is gone or this phone is no longer a player (left elsewhere,
+ * or removed by the host: "You're no longer in this game"), and on Leave.
  */
 export function GameScreen({ gameId }: { gameId: string }) {
   const session = useSession();
@@ -126,6 +127,7 @@ function useActiveGameRecord(
   status: GameStatus | null,
   cached: ActiveGameRecord | null,
   userId: string | null,
+  removed: boolean,
 ) {
   // This page load has shown a game: `/` is in-app navigation from now on,
   // and a recap that was due for this game has now been opened.
@@ -196,10 +198,11 @@ function useActiveGameRecord(
     warmPageForOffline(`${window.location.origin}/game/${gameId}`);
   }, [saveable, gameId]);
 
-  // Ended or gone: forget the game; a live end (seen on server data while
-  // this screen was up) lets the next open of `/` land on the recap once.
+  // Ended, gone or no longer ours: forget the game; a live end (seen on
+  // server data while this screen was up) lets the next open of `/` land on
+  // the recap once.
   const lastConfirmed = useRef<GameStatus | null>(null);
-  const notFound = result.status === "not_found";
+  const notFound = result.status === "not_found" || removed;
   useEffect(() => {
     if (notFound) {
       pendingSave.current = null;
@@ -220,6 +223,38 @@ function useActiveGameRecord(
 function squareLabel(squares: readonly Square[], position: number): string {
   const label = squares.find((s) => s.position === position)?.label.trim();
   return label || `square ${position + 1}`;
+}
+
+/** What this phone last knew about the game, for "Join again" once it is no longer a player. */
+type KnownGame = { code: string; name: string };
+
+/**
+ * This phone was a player and is not any more: the host removed it from the
+ * lobby (or it left from another tab). The game is invisible to it now (RLS),
+ * so all it can offer is the invite link again, if it still knows the code.
+ */
+function NoLongerInGame({ gameId, known }: { gameId: string; known: KnownGame | null }) {
+  return (
+    <div className="flex min-w-0 flex-col items-start" data-testid="no-longer-in-game">
+      <PaperTitle>You&apos;re no longer in this game</PaperTitle>
+      <p className="text-lg leading-7 text-ink-soft">
+        {known ? `You're not on the player list for ${known.name} any more.` : "You're not on the player list any more."}{" "}
+        The host may have removed you from the lobby.
+      </p>
+      <div className="mt-[14px] flex flex-wrap items-center gap-3">
+        {known ? (
+          // A full page load, not a client navigation: Next keeps the join screen this tab
+          // used before mounted (Activity), still showing its old "Joining…" state.
+          <a href={`/g/${known.code}`} className={pencilButtonClass("primary")} data-testid="join-again">
+            Join again
+          </a>
+        ) : null}
+        <PencilLink href="/" variant="secondary" data-testid="no-longer-home" onClick={() => goHomeOnPurpose(gameId)}>
+          Home
+        </PencilLink>
+      </div>
+    </div>
+  );
 }
 
 /** How long the "Couldn't save …" line stays up unless dismissed. */
@@ -328,7 +363,23 @@ function GameView({
     }
   }
 
-  useActiveGameRecord(gameId, result, liveStatus, cached, userId);
+  // "No longer in this game": this phone had the game (it knows its code) and
+  // now the server says not found, or the player list no longer has us (a
+  // Realtime DELETE of our own row, before the resync turns into not found).
+  const readyGame = result.status === "ready" ? result.game : null;
+  const [known, setKnown] = useState<KnownGame | null>(() =>
+    cached ? { code: cached.joinCode, name: cached.name } : null,
+  );
+  if (readyGame && (known?.code !== readyGame.join_code || known.name !== readyGame.name)) {
+    setKnown({ code: readyGame.join_code, name: readyGame.name });
+  }
+  const [wasMember, setWasMember] = useState(false);
+  if (result.me !== null && !wasMember) setWasMember(true);
+  const removed =
+    (result.status === "not_found" && known !== null) ||
+    (result.status === "ready" && result.confirmed && sessionReady && wasMember && result.me === null);
+
+  useActiveGameRecord(gameId, result, liveStatus, cached, userId, removed);
 
   const notice = (
     <DroppedNotice
@@ -343,6 +394,8 @@ function GameView({
       <GameBody
         gameId={gameId}
         result={result}
+        removed={removed}
+        known={known}
         status={liveStatus}
         start={start}
         onStartDone={() => setStart(null)}
@@ -362,6 +415,8 @@ type Look = ReturnType<typeof useSettings>;
 function GameBody({
   gameId,
   result,
+  removed,
+  known,
   status,
   start,
   onStartDone,
@@ -370,6 +425,9 @@ function GameBody({
 }: {
   gameId: string;
   result: UseGameResult;
+  /** This phone was a player and no longer is. */
+  removed: boolean;
+  known: KnownGame | null;
   status: GameStatus | null;
   start: StartShow | null;
   onStartDone: () => void;
@@ -380,6 +438,13 @@ function GameBody({
     return (
       <Paper>
         <SkeletonLines lines={4} label="Loading game" />
+      </Paper>
+    );
+  }
+  if (removed) {
+    return (
+      <Paper>
+        <NoLongerInGame gameId={gameId} known={known} />
       </Paper>
     );
   }

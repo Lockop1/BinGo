@@ -174,3 +174,36 @@ export async function rpcAs<T>(context: BrowserContext, name: string, args: Reco
   expect(res.ok(), `${name}: ${res.status()} ${await res.text()}`).toBe(true);
   return (await res.json()) as T;
 }
+
+export type SquareRow = { current_count: number; target_count: number; completed_at: string | null };
+
+/** The server's copy of one square, read through PostgREST as the given phone (RLS: members only). */
+export async function squareAs(context: BrowserContext, gameId: string, position: number): Promise<SquareRow> {
+  const env = publicSupabaseEnv();
+  if (!env) throw new Error("NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+  const token = await accessToken(context);
+  const res = await context.request.get(
+    `${env.url}/rest/v1/squares?game_id=eq.${gameId}&position=eq.${position}&select=current_count,target_count,completed_at`,
+    { headers: { apikey: env.anonKey, Authorization: `Bearer ${token}` } },
+  );
+  expect(res.ok(), `squares: ${res.status()} ${await res.text()}`).toBe(true);
+  const rows = (await res.json()) as SquareRow[];
+  expect(rows, "square row").toHaveLength(1);
+  return rows[0];
+}
+
+/** Another phone joins by the invite link and lands in the lobby (or on the live board, for a late join). */
+export async function joinPhone(
+  browser: Browser,
+  code: string,
+  name: string,
+  options?: BrowserContextOptions,
+): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext(options);
+  const page = await context.newPage();
+  await page.goto(`/g/${code}`);
+  await page.getByTestId("join-name").fill(name);
+  await page.getByTestId("join-game").click();
+  await expect(page.getByTestId("game-screen")).toBeVisible();
+  return { context, page };
+}

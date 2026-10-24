@@ -150,9 +150,11 @@ tables directly.
 | `update_square` | player | lobby only; label ≤40, details ≤200; last write wins |
 | `start_game` | host only | lobby only; all players ready; sets `started_at`, `auto_end_at` (+24h) |
 | `complete_square` | player | active only |
-| `increment_square` | player | active only; completes at `target_count`, credit to whoever hits it |
+| `increment_square` | player | active only; +1 per tap, idempotent per client action id; completes at `target_count`, credit to whoever hits it |
 | `undo_completion` | completer or host | active only |
-| `end_game` | host only | active only |
+| `end_game` | host only | lobby or active (ending a lobby is how the host closes it) |
+| `leave_game` | player (not the host) | lobby only; deletes the caller's player row |
+| `remove_player` | host only | lobby only; deletes another player's row (never the host's) |
 | `register_media` | player | records an uploaded object under the game's storage prefix |
 
 The free-space toggle is host-only and enforced in the RPC that applies it.
@@ -276,9 +278,11 @@ Source of truth: `supabase/migrations/` (schema + RLS, RPCs, storage). Types: `s
 | `set_free_center(game_id uuid, enabled boolean)` | `games` row | host only; `lobby` only | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `invalid_argument` (`enabled` null) |
 | `start_game(game_id uuid)` | `games` row | host only; `lobby` only; **every** player incl. the host must be ready. Sets `status = 'active'`, `started_at = now()`, `auto_end_at = started_at + 24h`. If `free_center`: square 12 completed with `completed_by_player_id = null`, `current_count = target_count`, label `'FREE'` if blank | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `players_not_ready` |
 | `complete_square(game_id uuid, position integer)` | `square_result` | any player; `active` only; only squares with `target_count = 1`. Already completed (by anyone, incl. free center) → `applied = false` + current row, **no error** | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `is_counter` (use `increment_square`) |
-| `increment_square(game_id uuid, position integer, expected_count integer = null)` | `square_result` | any player; `active` only; counter squares (`target_count > 1`). Atomic +1; reaching the target completes it and credits the caller. Already completed → `applied = false`. With `expected_count`, only applies if `current_count = expected_count` (compare-and-set: send the count you saw so a retried request never double-counts; on `applied = false` adopt the returned row) | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `not_counter` |
+| `increment_square(game_id uuid, position integer, action_id uuid = null)` | `square_result` | any player; `active` only; counter squares (`target_count > 1`). +1 under the square's row lock; reaching the target completes it and credits the caller. Already completed → `applied = false`. `action_id` is a client-generated UUID per tap, sent again unchanged on every retry of that tap: each id counts at most once (a repeat → `applied = false` + the current row, recorded in the internal `square_increments` log), while different ids always all count, so simultaneous and offline taps are never lost. `null` → a plain +1 with no retry protection. Either way, on `applied = false` adopt the returned row | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `not_counter` |
 | `undo_completion(game_id uuid, position integer)` | `square_result` | the completer or the host; `active` only. Clears completion; `current_count = target_count - 1` (0 for normal squares). Not completed → `applied = false`, no error. Free center (completed by nobody) can never be undone | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `not_allowed` |
-| `end_game(game_id uuid)` | `games` row | host only; from `lobby` or `active`; sets `status = 'ended'`, `ended_at` (= `auto_end_at` if already overdue, else now). Already ended → returns row unchanged | `not_authenticated`, `game_not_found`, `not_host` |
+| `end_game(game_id uuid)` | `games` row | host only; from `lobby` **or** `active` (in the lobby it is the host's way out, since the host cannot `leave_game`); sets `status = 'ended'`, `ended_at` (= `auto_end_at` if already overdue, else now). Already ended → returns row unchanged | `not_authenticated`, `game_not_found`, `not_host` |
+| `leave_game(game_id uuid)` | `boolean` (`true`) | any player except the host; `lobby` only. Deletes the caller's `players` row under the game lock (like `join_game`), freeing the slot and color for the next joiner. The caller is then a non-member (RLS hides the game); they may join again with the code | `not_authenticated`, `game_not_found`, `game_not_in_lobby`, `host_cannot_leave` |
+| `remove_player(game_id uuid, player_id uuid)` | `boolean` (`true`) | host only; `lobby` only. Deletes another player's row under the game lock (e.g. someone who wandered off without tapping Ready), so `start_game` is no longer blocked by them | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `not_allowed` (removing yourself), `player_not_found` (not a player of this game, e.g. already left) |
 | `register_media(game_id uuid, position integer, storage_path text, kind text)` | `media` row | any player; game `active` or `ended`, before `expires_at`; square must be completed. `storage_path` = `<game_id>/<segments>` where each segment matches `[A-Za-z0-9_-][A-Za-z0-9._-]*`, max 512 chars; `kind` is `'photo'` or `'video'`. Same path again by the same player/square → returns the existing row | `not_authenticated`, `game_not_found`, `game_not_started` (lobby), `game_expired`, `invalid_kind`, `invalid_storage_path`, `invalid_position`, `square_not_completed`, `invalid_storage_path` (path already used by someone else) |
 | `auto_end_due_games()` | `number` (games ended) | **service_role only** (cleanup cron); no `auth.uid()` check. Ends every `active` game with `auto_end_at <= now()`, setting `ended_at = auto_end_at` | `42501` for any other role |
 
@@ -311,7 +315,9 @@ Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs th
 | `game_not_started` | "Media can be added once the game starts." |
 | `game_expired` | "This album has expired." |
 | `not_host` | "Only the host can do that." |
-| `not_allowed` | "Only the person who completed it or the host can undo this." / the free space can't be undone |
+| `not_allowed` | "Only the person who completed it or the host can undo this." / the free space can't be undone / the host tried to remove themselves |
+| `host_cannot_leave` | "The host can't leave. End the game instead." |
+| `player_not_found` | "That player has already left." (`remove_player` on someone not in the game) |
 | `players_not_ready` | "Everyone needs to tap Ready first." |
 | `invalid_name` | Game name must be 1–60 characters. |
 | `invalid_display_name` | Name must be 1–24 characters. |
@@ -345,7 +351,12 @@ Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs th
   no RPC that deletes a `media` row yet).
 - **Cron** (`/api/cron/cleanup`, service-role client): `rpc("auto_end_due_games")`, then remove
   storage objects of games with `expires_at < now()`, then `delete from games where expires_at < now()`
-  (cascades to players, squares, media). service_role keeps its table privileges for this.
+  (cascades to players, squares, media, square_increments). `service_role`'s select / insert / update /
+  delete on all five tables are granted explicitly in the migrations, not left to Supabase's default
+  privileges for new tables (SQL test (s) checks them).
+- **`square_increments`** (counter action log, `action_id` primary key): internal to
+  `increment_square`. RLS on with no policies, no privileges for `anon` / `authenticated`, not in the
+  Realtime publication; nothing client-facing reads it.
 
 ### Regenerating `src/types/database.ts`
 
@@ -377,7 +388,7 @@ compiler's printer, 2-space indent) and keep the header comment.
   `SET LOCAL ROLE`), and `tests.is` / `tests.ok` / `tests.throws(stmt, code)` /
   `tests.denied(stmt)` (privilege missing) / `tests.rls_denied(stmt)` (RLS rejected the row).
   `*.test.sh` files get the database URL as `$1` and print their own PASS/FAIL line (used for the
-  multi-session concurrent-join test).
+  multi-session tests: concurrent joins (t) and concurrent counter +1s (v)).
 - Shim caveat: the shim only emulates what the migrations touch: the `anon` / `authenticated` /
   `service_role` / `authenticator` roles, Supabase-style default privileges on `public`,
   `auth.users` (stub) and `auth.uid()/jwt()/role()` read from `request.jwt.claims`, stub
@@ -417,6 +428,13 @@ compiler's printer, 2-space indent) and keep the header comment.
   server row and this phone's last RPC result) + unsettled overlays in tap order, so refetches never
   flip a pending cross-off back; a settled `square_result` row always wins (`applied = false` just
   adopts it). `useBoardState` wires the queue to the RPCs and folds rows back via `applySquare`.
+  **Counters use action ids, not compare-and-set**: every queued action has a client UUID
+  (`newActionId`, also without `crypto.randomUUID`), kept across retries and reloads; a +1 sends it as
+  `increment_square`'s `action_id`, so a retried tap is never counted twice and taps from several
+  phones, or made offline and sent later, all count. A counter shows `current_count` + this phone's
+  pending +1s (capped at the target), whatever count was on screen when tapping; a +1's
+  `applied = false` means "already counted (a retry) or already completed" and is adopted silently.
+  Queue items saved by older builds (with `expectedCount`) still restore; the field is ignored.
 - **Feedback**: `diffBoards` events → `toasts.ts` (one toast at a time, 2.5 s, ≤ 4 waiting; also
   `mediaToasts`; `GameScreen` shows `droppedNotices` for given-up taps), `celebrations.ts` (each line / blackout once per phone, remembered in
   `bingo.celebrated.<gameId>`; highlight → overlay → host blackout prompt), `lib/haptics.ts`
@@ -428,7 +446,8 @@ compiler's printer, 2-space indent) and keep the header comment.
   with a full snapshot (board draws before the session or network answers); `bingo.lastEnded` sends the
   next open to the recap once (24 h). `/` decides client-side (`InstantReturn` + `HOME_GUARD_SCRIPT`,
   never a server redirect, so it works from the SW cache); `?stay=1` or the per-tab sessionStorage
-  flag `bingo.stayHome` (Leave / Home links) keeps home. The record clears on end, not-found and Leave.
+  flag `bingo.stayHome` (Leave / Home links) keeps home. The record clears on end, not-found (incl.
+  "You're no longer in this game" after the host removed this phone) and Leave.
 - **Media**: `prepareMedia` (photo → JPEG ≤ 1600 px; video ≤ 15 s / 50 MB) → `uploadQueue` (in memory
   only, one item at a time, `<game_id>/<position>/<uuid>.<ext>`, `upsert: false`, 3 tries, then
   `register_media`; wired in `defaultUploadQueue.ts`) → `applyMedia`. Display only through

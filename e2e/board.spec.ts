@@ -166,7 +166,7 @@ test("live board: cross-off, toasts, bingo once, undo, counters, offline, end ga
   await expect(friend.getByTestId("game-screen")).toHaveAttribute("data-celebrations", "1");
   await expect(host.getByTestId("game-screen")).toHaveAttribute("data-celebrations", "0");
 
-  // --- Counter square: compare-and-set, no double counting.
+  // --- Counter square: every +1 counts exactly once (action ids; see counters.spec.ts).
   await openSquare(friend, 2);
   const counter = friend.getByTestId("counter-value");
   await expect(counter).toHaveText("0/15");

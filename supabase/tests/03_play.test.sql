@@ -208,28 +208,79 @@ begin
 end
 $body$);
 
-select tests.run('q', 'increment_square with expected_count is a compare-and-set, so a retried increment never double counts', $body$
+select tests.run('q', 'increment_square is idempotent per action_id: a retried id counts once, different ids all count, a null id always counts, retries after completion or undo are no-ops, the log records the acting player', $body$
 declare
   f tests.fixture;
   r public.square_result;
+  v_square_id uuid;
+  a1 uuid := gen_random_uuid();
+  a2 uuid := gen_random_uuid();
+  a3 uuid := gen_random_uuid();
+  a4 uuid := gen_random_uuid();
 begin
   f := tests.make_game(2, true, '[{"position": 9, "target_count": 5}]');
   perform tests.start_game(f);
+  select id into v_square_id from public.squares where game_id = f.game_id and position = 9;
+
+  -- The same action id twice (a retry after a lost response): one increment.
   perform tests.login(f.users[2]);
+  r := public.increment_square(f.game_id, 9, a1);
+  perform tests.ok(r.applied and r.current_count = 1, 'a1: 0 -> 1');
+  r := public.increment_square(f.game_id, 9, a1);
+  perform tests.is(r.applied, false, 'retry of a1 not applied');
+  perform tests.is(r.current_count, 1, 'retry of a1 reports 1');
+  perform tests.is(r.id, v_square_id, 'retry returns the square row');
 
-  r := public.increment_square(f.game_id, 9, 0);
-  perform tests.ok(r.applied and r.current_count = 1, '0 -> 1');
-  r := public.increment_square(f.game_id, 9, 0);
-  perform tests.ok(not r.applied and r.current_count = 1, 'retry from 0 is a no-op returning 1');
-
+  -- Two different ids (two phones that both saw 1/5): both count.
   perform tests.login(f.users[1]);
-  r := public.increment_square(f.game_id, 9, 1);
-  perform tests.ok(r.applied and r.current_count = 2, 'host 1 -> 2');
-
+  r := public.increment_square(f.game_id, 9, a2);
+  perform tests.ok(r.applied and r.current_count = 2, 'host a2: 1 -> 2');
   perform tests.login(f.users[2]);
-  r := public.increment_square(f.game_id, 9, 1);
-  perform tests.ok(not r.applied and r.current_count = 2, 'stale expected_count reports 2');
+  r := public.increment_square(f.game_id, 9, a3);
+  perform tests.ok(r.applied and r.current_count = 3, 'friend a3: 2 -> 3');
+
+  -- No id: increments every time (no idempotency).
   r := public.increment_square(f.game_id, 9);
-  perform tests.ok(r.applied and r.current_count = 3, 'plain increment still works');
+  perform tests.ok(r.applied and r.current_count = 4, 'omitted id: 3 -> 4');
+  r := public.increment_square(f.game_id, 9, null);
+  perform tests.ok(r.applied and r.current_count = 5, 'null id: 4 -> 5');
+  perform tests.ok(r.completed_at is not null, 'target reached: completed');
+  perform tests.is(r.completed_by_player_id, f.players[2], 'credited to the caller who hit the target');
+
+  -- Completed: a retry of an applied id and a fresh id are both no-ops.
+  r := public.increment_square(f.game_id, 9, a3);
+  perform tests.ok(not r.applied and r.current_count = 5, 'retry of a3 after completion');
+  perform tests.login(f.users[1]);
+  r := public.increment_square(f.game_id, 9, a4);
+  perform tests.ok(not r.applied and r.current_count = 5, 'new id a4 after completion');
+  perform tests.is(r.completed_by_player_id, f.players[2], 'credit unchanged');
+
+  -- The log: one row per applied id (none for null ids or refused taps), with the acting player.
+  perform tests.logout();
+  perform tests.is(
+    (select count(*) from public.square_increments where game_id = f.game_id), 3::bigint,
+    'three logged actions (a1, a2, a3)');
+  perform tests.is((select player_id from public.square_increments where action_id = a1), f.players[2], 'a1 by the friend');
+  perform tests.is((select player_id from public.square_increments where action_id = a2), f.players[1], 'a2 by the host');
+  perform tests.is((select square_id from public.square_increments where action_id = a3), v_square_id, 'a3 on square 9');
+  perform tests.ok(not exists (select 1 from public.square_increments where action_id = a4), 'a4 (refused) not logged');
+
+  -- Undo leaves the square at target - 1; an old id retried later still never counts twice.
+  perform tests.login(f.users[2]);
+  r := public.undo_completion(f.game_id, 9);
+  perform tests.ok(r.applied and r.current_count = 4 and r.completed_at is null, 'undo -> 4/5');
+  r := public.increment_square(f.game_id, 9, a1);
+  perform tests.ok(not r.applied and r.current_count = 4, 'retry of a1 after undo is a no-op');
+  perform tests.login(f.users[1]);
+  r := public.increment_square(f.game_id, 9, a4);
+  perform tests.ok(r.applied and r.current_count = 5, 'a4 (never applied) counts now');
+  perform tests.is(r.completed_by_player_id, f.players[1], 're-completed by the host');
+
+  -- Clients have no access to the log at all.
+  perform tests.denied('select count(*) from public.square_increments', 'member cannot read square_increments');
+  perform tests.denied(
+    format('insert into public.square_increments (action_id, game_id, square_id, player_id) values (gen_random_uuid(), %L, %L, %L)',
+      f.game_id, v_square_id, f.players[1]),
+    'member cannot write square_increments');
 end
 $body$);

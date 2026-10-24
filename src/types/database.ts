@@ -165,6 +165,65 @@ export type Database = {
           }
         ];
       };
+      "square_increments": {
+        Row: {
+          "action_id": string;
+          "created_at": string;
+          "game_id": string;
+          "player_id": string;
+          "square_id": string;
+        };
+        ComputedFields: never;
+        Insert: {
+          "action_id": string;
+          "created_at"?: string;
+          "game_id": string;
+          "player_id": string;
+          "square_id": string;
+        };
+        Update: {
+          "action_id"?: string;
+          "created_at"?: string;
+          "game_id"?: string;
+          "player_id"?: string;
+          "square_id"?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "square_increments_game_id_fkey";
+            columns: [
+              "game_id"
+            ];
+            isOneToOne: false;
+            referencedRelation: "games";
+            referencedColumns: [
+              "id"
+            ];
+          },
+          {
+            foreignKeyName: "square_increments_player_id_fkey";
+            columns: [
+              "player_id"
+            ];
+            isOneToOne: false;
+            referencedRelation: "players";
+            referencedColumns: [
+              "id"
+            ];
+          },
+          {
+            foreignKeyName: "square_increments_square_id_fkey";
+            columns: [
+              "square_id"
+            ];
+            isOneToOne: false;
+            referencedRelation: "squares";
+            referencedColumns: [
+              "id"
+            ];
+          }
+        ];
+      };
       "squares": {
         Row: {
           "completed_at": string | null;
@@ -311,7 +370,7 @@ export type Database = {
       };
       "increment_square": {
         Args: {
-          "expected_count"?: number;
+          "action_id"?: string;
           "game_id": string;
           "position": number;
         };
@@ -356,6 +415,12 @@ export type Database = {
           isSetofReturn: false;
         };
       };
+      "leave_game": {
+        Args: {
+          "game_id": string;
+        };
+        Returns: boolean;
+      };
       "peek_game": {
         Args: {
           "code": string;
@@ -390,6 +455,13 @@ export type Database = {
           isOneToOne: true;
           isSetofReturn: false;
         };
+      };
+      "remove_player": {
+        Args: {
+          "game_id": string;
+          "player_id": string;
+        };
+        Returns: boolean;
       };
       "safe_uuid": {
         Args: {

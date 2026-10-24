@@ -85,30 +85,27 @@ describe("deriveBoard / overlays", () => {
     expect(view).toMatchObject({ completed_by_player_id: JAKE, pending: false, pendingKind: null });
   });
 
-  it("predicts counter increments from the count shown when tapped", () => {
+  it("shows a counter as the server count plus this phone's pending +1s", () => {
     const base = square(2, { target_count: 15, current_count: 3 });
-    const one = overlaySquare(base, [action("increment", 2, { expectedCount: 3 })]);
+    const one = overlaySquare(base, [action("increment", 2)]);
     expect(one).toMatchObject({ current_count: 4, completed_at: null, pending: true, pendingKind: "increment" });
-    const three = overlaySquare(base, [
-      action("increment", 2, { expectedCount: 3 }),
-      action("increment", 2, { expectedCount: 4 }),
-      action("increment", 2, { expectedCount: 5 }),
-    ]);
+    const three = overlaySquare(base, [action("increment", 2), action("increment", 2), action("increment", 2)]);
     expect(three.current_count).toBe(6);
-    // The server moved on past what I saw: show the server count (my +1 will be rejected).
-    const moved = overlaySquare(square(2, { target_count: 15, current_count: 8 }), [
-      action("increment", 2, { expectedCount: 3 }),
-    ]);
-    expect(moved).toMatchObject({ current_count: 8, pending: false });
+    // Others' taps moved the server count on: mine still add on top (the server counts every tap).
+    const moved = overlaySquare(square(2, { target_count: 15, current_count: 8 }), [action("increment", 2)]);
+    expect(moved).toMatchObject({ current_count: 9, pending: true });
   });
 
   it("an increment reaching the target shows a pending completion by me", () => {
     const base = square(2, { target_count: 3, current_count: 2 });
-    const view = overlaySquare(base, [action("increment", 2, { expectedCount: 2 })]);
+    const view = overlaySquare(base, [action("increment", 2)]);
     expect(view).toMatchObject({ current_count: 3, completed_by_player_id: ME, pending: true });
     // Never past the target.
-    const over = overlaySquare(base, [action("increment", 2, { expectedCount: 2 }), action("increment", 2, { expectedCount: 3 })]);
+    const over = overlaySquare(base, [action("increment", 2), action("increment", 2)]);
     expect(over.current_count).toBe(3);
+    // Someone else completed it first: nothing to add.
+    const done = overlaySquare(square(2, completedBy(JAKE, 4, { target_count: 3, current_count: 3 })), [action("increment", 2)]);
+    expect(done).toMatchObject({ current_count: 3, completed_by_player_id: JAKE, pending: false });
   });
 
   it("a pending undo reopens the square (counter back to target - 1)", () => {
@@ -267,7 +264,7 @@ describe("hydration from the cached snapshot", () => {
 
   it("restored taps show on the snapshot board before the network answers", () => {
     const cached = board({ 0: completedBy(JAKE, 2), 2: { target_count: 15, current_count: 3, updated_at: stamp(2) } });
-    const restored = [action("complete", 5, { attempts: 1 }), action("increment", 2, { expectedCount: 3 })];
+    const restored = [action("complete", 5, { attempts: 1 }), action("increment", 2)];
     const view = deriveBoard(cached, GAME_ID, { actions: restored, results: {} });
     expect(at(view, 0)).toMatchObject({ completed_by_player_id: JAKE, pending: false });
     expect(at(view, 5)).toMatchObject({ completed_by_player_id: ME, pending: true, pendingKind: "complete" });
@@ -287,14 +284,14 @@ describe("hydration from the cached snapshot", () => {
     expect(merged[0]).toBe(fetched[0]);
     expect(merged[5]).toBe(fetched[5]);
 
-    const restored = [action("complete", 5), action("complete", 6), action("increment", 2, { expectedCount: 3 })];
+    const restored = [action("complete", 5), action("complete", 6), action("increment", 2)];
     const view = deriveBoard(merged, GAME_ID, { actions: restored, results: {} });
     // Someone else got it first: the server's completer shows, nothing pending to explain.
     expect(at(view, 5)).toMatchObject({ completed_by_player_id: JAKE, pending: false });
     // Still open on the server: the pending completion stays crossed off.
     expect(at(view, 6)).toMatchObject({ completed_by_player_id: ME, pending: true });
-    // The count moved past the one this +1 was tapped on: the server's count shows (the RPC will adopt it).
-    expect(at(view, 2)).toMatchObject({ current_count: 5, pending: false });
+    // Others moved the count to 5 meanwhile: this phone's +1 still shows on top of it.
+    expect(at(view, 2)).toMatchObject({ current_count: 6, pending: true });
     expect(at(view, 0)).toMatchObject({ completed_by_player_id: HOST });
   });
 

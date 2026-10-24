@@ -335,7 +335,7 @@ export function isStayHome(search: string = typeof window === "undefined" ? "" :
   return flagged || new URLSearchParams(search).get("stay") === "1";
 }
 
-/** Leave in the lobby: forget the game here (not the membership) and stay home. */
+/** Leave in the lobby (after `leave_game` removed the membership): forget the game here and stay home. */
 export function leaveToHome(gameId: string): void {
   suppressed.add(gameId);
   clearActiveGame(gameId);

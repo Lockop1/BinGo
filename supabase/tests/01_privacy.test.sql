@@ -95,13 +95,19 @@ begin
     perform tests.is(
       has_table_privilege('anon', 'public.' || t, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'),
       false, 'anon has no privilege on ' || t);
-    -- The cleanup cron uses service_role; its Supabase default grants stay.
-    perform tests.is(
-      has_table_privilege('service_role', 'public.' || t, 'SELECT') and
-      has_table_privilege('service_role', 'public.' || t, 'UPDATE') and
-      has_table_privilege('service_role', 'public.' || t, 'DELETE'),
-      true, 'service_role keeps select/update/delete on ' || t);
   end loop;
+  -- The counter action log is internal to increment_square: no client privilege at all.
+  perform tests.is(
+    has_table_privilege('authenticated', 'public.square_increments', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'),
+    false, 'authenticated has no privilege on square_increments');
+  perform tests.is(
+    has_table_privilege('anon', 'public.square_increments', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'),
+    false, 'anon has no privilege on square_increments');
+  perform tests.login(f.users[1]);
+  perform tests.denied('select count(*) from public.square_increments', 'member select square_increments');
+  perform tests.denied('delete from public.square_increments', 'member delete square_increments');
+  perform tests.login_anon();
+  perform tests.denied('select count(*) from public.square_increments', 'anon select square_increments');
 end
 $body$);
 
@@ -164,8 +170,9 @@ begin
       'create_game(text,text,boolean,jsonb)', 'join_game(text,text)', 'peek_game(text)',
       'set_ready(uuid,boolean)', 'update_square(uuid,integer,text,text,integer)',
       'set_free_center(uuid,boolean)', 'start_game(uuid)', 'complete_square(uuid,integer)',
-      'increment_square(uuid,integer,integer)', 'undo_completion(uuid,integer)', 'end_game(uuid)',
-      'register_media(uuid,integer,text,text)', 'is_game_member(uuid)', 'is_game_host(uuid)',
+      'increment_square(uuid,integer,uuid)', 'undo_completion(uuid,integer)', 'end_game(uuid)',
+      'register_media(uuid,integer,text,text)', 'leave_game(uuid)', 'remove_player(uuid,uuid)',
+      'is_game_member(uuid)', 'is_game_host(uuid)',
       'safe_uuid(text)', 'can_upload_game_media(uuid)'
     ])
   ) x;
@@ -209,6 +216,8 @@ begin
     $q$select public.undo_completion(gen_random_uuid(), 0)$q$,
     $q$select public.end_game(gen_random_uuid())$q$,
     $q$select public.register_media(gen_random_uuid(), 0, 'x/y', 'photo')$q$,
+    $q$select public.leave_game(gen_random_uuid())$q$,
+    $q$select public.remove_player(gen_random_uuid(), gen_random_uuid())$q$,
     $q$select public.auto_end_due_games()$q$,
     $q$select public.is_game_member(gen_random_uuid())$q$,
     $q$select public.is_game_host(gen_random_uuid())$q$,
@@ -246,7 +255,10 @@ begin
       'select public.increment_square(%L, 1)',
       'select public.undo_completion(%L, 0)',
       'select public.end_game(%L)',
-      'select public.register_media(%1$L, 0, %1$L || ''/0/x.jpg'', ''photo'')'
+      'select public.register_media(%1$L, 0, %1$L || ''/0/x.jpg'', ''photo'')',
+      'select public.increment_square(%L, 1, gen_random_uuid())',
+      'select public.leave_game(%L)',
+      'select public.remove_player(%L, gen_random_uuid())'
     ] loop
       perform tests.throws(format(v_stmt, v_target), 'game_not_found', format(v_stmt, v_target));
     end loop;
@@ -280,7 +292,10 @@ begin
     $q$select public.increment_square(gen_random_uuid(), 0)$q$,
     $q$select public.undo_completion(gen_random_uuid(), 0)$q$,
     $q$select public.end_game(gen_random_uuid())$q$,
-    $q$select public.register_media(gen_random_uuid(), 0, 'x/y', 'photo')$q$
+    $q$select public.register_media(gen_random_uuid(), 0, 'x/y', 'photo')$q$,
+    $q$select public.increment_square(gen_random_uuid(), 0, gen_random_uuid())$q$,
+    $q$select public.leave_game(gen_random_uuid())$q$,
+    $q$select public.remove_player(gen_random_uuid(), gen_random_uuid())$q$
   ] loop
     perform tests.throws(v_stmt, 'not_authenticated', v_stmt);
   end loop;
@@ -288,7 +303,7 @@ begin
 end
 $body$);
 
-select tests.run('s', 'schema invariants: RLS on, select-only policies, realtime publication + replica identity, private bucket, definer RPCs with pinned search_path', $body$
+select tests.run('s', 'schema invariants: RLS on, select-only policies, explicit service_role table privileges, realtime publication + replica identity, private bucket, definer RPCs with pinned search_path', $body$
 declare
   v_bad text;
   v_bucket storage.buckets;
@@ -304,7 +319,24 @@ begin
   perform tests.is(v_bad, null, 'public policies are SELECT-only for authenticated');
 
   perform tests.is(
-    (select count(*) from pg_policies where schemaname = 'public'), 4::bigint, 'one policy per table');
+    (select count(*) from pg_policies where schemaname = 'public'), 4::bigint,
+    'one policy per client-readable table (square_increments has none)');
+
+  -- The cleanup cron (service_role) needs CRUD on every app table; the
+  -- migrations state it instead of relying on Supabase's default privileges.
+  select string_agg(t, ', ') into v_bad
+  from unnest(array['games', 'players', 'squares', 'media', 'square_increments']) as t
+  where not (
+    has_table_privilege('service_role', 'public.' || t, 'SELECT')
+    and has_table_privilege('service_role', 'public.' || t, 'INSERT')
+    and has_table_privilege('service_role', 'public.' || t, 'UPDATE')
+    and has_table_privilege('service_role', 'public.' || t, 'DELETE')
+  );
+  perform tests.is(v_bad, null, 'service_role holds select/insert/update/delete on every app table');
+  perform tests.is(
+    (select array_agg(c.relname::text order by c.relname) from pg_class c
+     where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p')),
+    array['games', 'media', 'players', 'square_increments', 'squares'], 'the five app tables');
 
   select string_agg(c.relname, ', ') into v_bad
   from pg_class c
@@ -342,8 +374,8 @@ begin
   where p.pronamespace = 'public'::regnamespace
     and p.proname in ('create_game', 'join_game', 'peek_game', 'set_ready', 'update_square',
       'set_free_center', 'start_game', 'complete_square', 'increment_square', 'undo_completion',
-      'end_game', 'register_media', 'auto_end_due_games', 'is_game_member', 'is_game_host',
-      'can_upload_game_media')
+      'end_game', 'register_media', 'leave_game', 'remove_player', 'auto_end_due_games',
+      'is_game_member', 'is_game_host', 'can_upload_game_media')
     and not p.prosecdef;
   perform tests.is(v_bad, null, 'RPCs and membership helpers are SECURITY DEFINER');
 end

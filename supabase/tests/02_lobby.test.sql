@@ -302,3 +302,125 @@ begin
     'no ambiguous characters');
 end
 $body$);
+
+select tests.run('w', 'leave_game: a member leaves the lobby (row gone, color freed for the next joiner); the host cannot leave; no leaving after start; non-members get game_not_found', $body$
+declare
+  f tests.fixture;
+  v_user uuid;
+  v_player public.players;
+begin
+  f := tests.make_game(3);
+
+  -- Player 2 (color 1) leaves.
+  perform tests.login(f.users[2]);
+  perform tests.is(public.leave_game(f.game_id), true, 'leave returns true');
+  perform tests.logout();
+  perform tests.ok(not exists (select 1 from public.players where id = f.players[2]), 'players row deleted');
+  perform tests.is((select count(*) from public.players where game_id = f.game_id), 2::bigint, '2 players left');
+  perform tests.is(
+    (select array_agg(color order by color) from public.players where game_id = f.game_id),
+    array[0, 2]::smallint[], 'color 1 is free again');
+
+  -- The leaver is no longer a member: no reads, no RPCs, no second leave.
+  perform tests.login(f.users[2]);
+  perform tests.is((select count(*) from public.games where id = f.game_id), 0::bigint, 'leaver cannot read the game');
+  perform tests.throws(format('select public.leave_game(%L)', f.game_id), 'game_not_found', 'second leave');
+  perform tests.throws(format('select public.set_ready(%L, true)', f.game_id), 'game_not_found', 'leaver set_ready');
+
+  -- The next joiner reuses the freed color.
+  perform tests.logout();
+  v_user := tests.new_user();
+  perform tests.login(v_user);
+  v_player := public.join_game(f.join_code, 'Newcomer');
+  perform tests.is(v_player.color, 1::smallint, 'next joiner gets the freed color');
+
+  -- The leaver may come back through the link like anyone else.
+  perform tests.login(f.users[2]);
+  v_player := public.join_game(f.join_code, 'Back again');
+  perform tests.is(v_player.color, 3::smallint, 'leaver rejoins as a new player');
+  perform tests.is(v_player.is_ready, false, 'rejoined player is not ready');
+
+  -- The host cannot leave (they end the game instead).
+  perform tests.login(f.users[1]);
+  perform tests.throws(format('select public.leave_game(%L)', f.game_id), 'host_cannot_leave', 'host leave');
+  perform tests.ok(exists (select 1 from public.players where id = f.players[1]), 'host row intact');
+
+  -- Outsiders and unknown games look the same.
+  perform tests.logout();
+  v_user := tests.new_user();
+  perform tests.login(v_user);
+  perform tests.throws(format('select public.leave_game(%L)', f.game_id), 'game_not_found', 'outsider leave');
+  perform tests.throws(format('select public.leave_game(%L)', gen_random_uuid()), 'game_not_found', 'unknown game');
+  perform tests.throws('select public.leave_game(null)', 'game_not_found', 'null game');
+
+  -- Lobby only: once started nobody can leave (status is checked before the host rule).
+  f := tests.make_game(2);
+  perform tests.start_game(f);
+  perform tests.login(f.users[2]);
+  perform tests.throws(format('select public.leave_game(%L)', f.game_id), 'game_not_in_lobby', 'leave after start');
+  perform tests.login(f.users[1]);
+  perform tests.throws(format('select public.leave_game(%L)', f.game_id), 'game_not_in_lobby', 'host leave after start');
+  perform public.end_game(f.game_id);
+  perform tests.login(f.users[2]);
+  perform tests.throws(format('select public.leave_game(%L)', f.game_id), 'game_not_in_lobby', 'leave after end');
+  perform tests.logout();
+  perform tests.is((select count(*) from public.players where game_id = f.game_id), 2::bigint, 'both still players');
+end
+$body$);
+
+select tests.run('x', 'remove_player: host only, lobby only, never self; unknown or foreign players get player_not_found; removing the only unready player unblocks start_game', $body$
+declare
+  f tests.fixture;
+  g tests.fixture;
+  v_game public.games;
+begin
+  f := tests.make_game(3);
+  g := tests.make_game(2);
+
+  -- A non-host member cannot remove anyone.
+  perform tests.login(f.users[2]);
+  perform tests.throws(format('select public.remove_player(%L, %L)', f.game_id, f.players[3]), 'not_host', 'member removes member');
+  perform tests.throws(format('select public.remove_player(%L, %L)', f.game_id, f.players[1]), 'not_host', 'member removes host');
+
+  -- The host cannot remove themselves, a stranger's id or another game's player.
+  perform tests.login(f.users[1]);
+  perform tests.throws(format('select public.remove_player(%L, %L)', f.game_id, f.players[1]), 'not_allowed', 'host removes self');
+  perform tests.throws(format('select public.remove_player(%L, %L)', f.game_id, gen_random_uuid()), 'player_not_found', 'unknown player');
+  perform tests.throws(format('select public.remove_player(%L, %L)', f.game_id, g.players[2]), 'player_not_found', 'other game''s player');
+  perform tests.throws(format('select public.remove_player(%L, null)', f.game_id), 'player_not_found', 'null player');
+  perform tests.logout();
+  perform tests.ok(exists (select 1 from public.players where id = g.players[2]), 'other game''s player untouched');
+
+  -- Everyone but player 3 is ready: Start is blocked by them.
+  perform tests.login(f.users[1]);
+  perform public.set_ready(f.game_id, true);
+  perform tests.login(f.users[2]);
+  perform public.set_ready(f.game_id, true);
+  perform tests.login(f.users[1]);
+  perform tests.throws(format('select public.start_game(%L)', f.game_id), 'players_not_ready', 'blocked by player 3');
+
+  -- The host removes player 3: their row is gone and Start goes through.
+  perform tests.is(public.remove_player(f.game_id, f.players[3]), true, 'remove returns true');
+  perform tests.throws(format('select public.remove_player(%L, %L)', f.game_id, f.players[3]), 'player_not_found', 'remove twice');
+  perform tests.logout();
+  perform tests.ok(not exists (select 1 from public.players where id = f.players[3]), 'players row deleted');
+  perform tests.login(f.users[3]);
+  perform tests.is((select count(*) from public.players), 0::bigint, 'removed player can no longer read the game');
+  perform tests.throws(format('select public.set_ready(%L, true)', f.game_id), 'game_not_found', 'removed player set_ready');
+  perform tests.login(f.users[1]);
+  v_game := public.start_game(f.game_id);
+  perform tests.is(v_game.status, 'active'::public.game_status, 'start succeeds once the unready player is removed');
+
+  -- Lobby only (checked after the host rule).
+  perform tests.throws(format('select public.remove_player(%L, %L)', f.game_id, f.players[2]), 'game_not_in_lobby', 'host removes after start');
+  perform tests.login(f.users[2]);
+  perform tests.throws(format('select public.remove_player(%L, %L)', f.game_id, f.players[1]), 'not_host', 'member removes after start');
+
+  -- Outsiders and unknown games look the same.
+  perform tests.login(g.users[2]);
+  perform tests.throws(format('select public.remove_player(%L, %L)', f.game_id, f.players[2]), 'game_not_found', 'outsider remove');
+  perform tests.throws(format('select public.remove_player(%L, %L)', gen_random_uuid(), f.players[2]), 'game_not_found', 'unknown game');
+  perform tests.logout();
+  perform tests.is((select count(*) from public.players where game_id = f.game_id), 2::bigint, 'host and player 2 remain');
+end
+$body$);
