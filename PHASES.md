@@ -25,11 +25,11 @@ Update the checkbox and status notes as each phase lands. See `CLAUDE.md` for in
 
 ## Phase 10 — Spec additions (2026-10-24)
 
-- [ ] **10a — Play again + public peek** (DB: `play_again`, `peek_game_public`, `games.next_game_id/next_join_code`; recap "Play again" text link + one-tap Join for existing players)
-  - Status notes: not started.
-- [ ] **10b — Logo and icon set + Open Graph previews for `/g/[code]`** (3×3 marker grid with a diagonal scribble; favicon/apple/192/512/maskable; `opengraph-image.tsx` in Whiteboard style with the logo)
-  - Status notes: not started.
-- [ ] **10c — Lightweight analytics** (PostHog free tier; events game_created, player_joined, game_started, square_completed, media_uploaded, game_ended, recap_viewed, play_again; no personal data)
-  - Status notes: not started.
+- [x] **10a — Play again + public peek** (DB: `play_again`, `peek_game_public`, `games.next_game_id/next_join_code`; recap "Play again" text link + one-tap Join for existing players)
+  - Status notes: DONE. Migration `20261024135801_play_again_public_peek.sql`: `games.next_game_id/next_join_code`, `peek_game_public` (the only anon-executable function), `play_again` (idempotent per game, copies the board, caller hosts under their old name). 28/28 SQL tests incl. a 6-session race. Recap bottom text link: Play again / A new game is ready · Join / Go to the new game. e2e `play-again.spec.ts`.
+- [x] **10b — Logo and icon set + Open Graph previews for `/g/[code]`** (3×3 marker grid with a diagonal scribble; favicon/apple/192/512/maskable; `opengraph-image.tsx` in Whiteboard style with the logo)
+  - Status notes: DONE. `public/icons/logo.svg` (3×3 marker grid + red diagonal scribble), favicon.ico + 16/32, apple 180, 192/512, maskable; `src/components/brand/Logo.tsx`; `/g/[code]` `generateMetadata` + `opengraph-image.tsx` (1200×630 whiteboard card via `peek_game_public`, bundled fonts, generic card for unknown codes). e2e `og.spec.ts`.
+- [x] **10c — Lightweight analytics** (PostHog free tier; events game_created, player_joined, game_started, square_completed, media_uploaded, game_ended, recap_viewed, play_again; no personal data)
+  - Status notes: DONE. `posthog-js` behind `src/lib/analytics.ts` (lazy, off without `NEXT_PUBLIC_POSTHOG_KEY`/with DNT/GPC, memory persistence, strict per-event prop allow-list, sanitize + before_send). Events wired at success points; `AnalyticsProvider` in layout, `RecapViewedTracker` on the recap. 16 unit tests; e2e `analytics.spec.ts` (runs when the host ends in `/__ph`).
 - [ ] **10d — TESTING.md** two-phone checklist
   - Status notes: not started.

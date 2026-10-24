@@ -1,6 +1,13 @@
 import type { Database, Tables } from "@/types/database";
 
-export type Game = Tables<"games">;
+type GameRow = Tables<"games">;
+type RematchColumns = "next_game_id" | "next_join_code";
+/**
+ * A `games` row. The rematch columns (set by `play_again`) are optional on the
+ * client: game snapshots cached in `bingo.activeGame` by builds from before
+ * they existed are restored as they were saved. Read them with `?? null`.
+ */
+export type Game = Omit<GameRow, RematchColumns> & Partial<Pick<GameRow, RematchColumns>>;
 export type Player = Tables<"players">;
 export type Square = Tables<"squares">;
 export type Media = Tables<"media">;

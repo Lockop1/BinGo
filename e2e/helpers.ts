@@ -207,3 +207,15 @@ export async function joinPhone(
   await expect(page.getByTestId("game-screen")).toBeVisible();
   return { context, page };
 }
+
+/** Rows from a PostgREST table path (e.g. `games?id=eq.<id>&select=*`), read as the given phone (RLS applies). */
+export async function selectAs<T>(context: BrowserContext, path: string): Promise<T[]> {
+  const env = publicSupabaseEnv();
+  if (!env) throw new Error("NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+  const token = await accessToken(context);
+  const res = await context.request.get(`${env.url}/rest/v1/${path}`, {
+    headers: { apikey: env.anonKey, Authorization: `Bearer ${token}` },
+  });
+  expect(res.ok(), `${path}: ${res.status()} ${await res.text()}`).toBe(true);
+  return (await res.json()) as T[];
+}

@@ -20,6 +20,8 @@ export type Database = {
           "id": string;
           "join_code": string;
           "name": string;
+          "next_game_id": string | null;
+          "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
         };
@@ -34,6 +36,8 @@ export type Database = {
           "id"?: string;
           "join_code": string;
           "name": string;
+          "next_game_id"?: string | null;
+          "next_join_code"?: string | null;
           "started_at"?: string | null;
           "status"?: Database["public"]['Enums']["game_status"];
         };
@@ -47,10 +51,23 @@ export type Database = {
           "id"?: string;
           "join_code"?: string;
           "name"?: string;
+          "next_game_id"?: string | null;
+          "next_join_code"?: string | null;
           "started_at"?: string | null;
           "status"?: Database["public"]['Enums']["game_status"];
         };
         Relationships: [
+          {
+            foreignKeyName: "games_next_game_id_fkey";
+            columns: [
+              "next_game_id"
+            ];
+            isOneToOne: false;
+            referencedRelation: "games";
+            referencedColumns: [
+              "id"
+            ];
+          }
         ];
       };
       "media": {
@@ -334,6 +351,8 @@ export type Database = {
           "id": string;
           "join_code": string;
           "name": string;
+          "next_game_id": string | null;
+          "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
         };
@@ -358,6 +377,8 @@ export type Database = {
           "id": string;
           "join_code": string;
           "name": string;
+          "next_game_id": string | null;
+          "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
         };
@@ -433,6 +454,44 @@ export type Database = {
           isSetofReturn: false;
         };
       };
+      "peek_game_public": {
+        Args: {
+          "code": string;
+        };
+        Returns: Database["public"]['CompositeTypes']["game_preview"];
+        SetofOptions: {
+          from: "*";
+          to: "game_preview";
+          isOneToOne: true;
+          isSetofReturn: false;
+        };
+      };
+      "play_again": {
+        Args: {
+          "game_id": string;
+        };
+        Returns: {
+          "auto_end_at": string | null;
+          "created_at": string;
+          "ended_at": string | null;
+          "expires_at": string;
+          "free_center": boolean;
+          "host_user_id": string;
+          "id": string;
+          "join_code": string;
+          "name": string;
+          "next_game_id": string | null;
+          "next_join_code": string | null;
+          "started_at": string | null;
+          "status": Database["public"]['Enums']["game_status"];
+        };
+        SetofOptions: {
+          from: "*";
+          to: "games";
+          isOneToOne: true;
+          isSetofReturn: false;
+        };
+      };
       "register_media": {
         Args: {
           "game_id": string;
@@ -484,6 +543,8 @@ export type Database = {
           "id": string;
           "join_code": string;
           "name": string;
+          "next_game_id": string | null;
+          "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
         };
@@ -529,6 +590,8 @@ export type Database = {
           "id": string;
           "join_code": string;
           "name": string;
+          "next_game_id": string | null;
+          "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
         };

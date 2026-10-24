@@ -11,7 +11,8 @@ import type { Database } from "@/types/database";
  * returns the typed row, and throws a `GameError` on failure.
  *
  * `auto_end_due_games` is service-role only (cleanup cron) and deliberately
- * has no browser wrapper.
+ * has no browser wrapper. `peek_game_public` needs no session and lives in
+ * `publicRpc.ts` (anon client, usable from server code).
  */
 
 type Functions = Database["public"]["Functions"];
@@ -134,6 +135,18 @@ export function leaveGame(gameId: string): Promise<boolean> {
 export function removePlayer(gameId: string, playerId: string): Promise<boolean> {
   const args: Args<"remove_player"> = { game_id: gameId, player_id: playerId };
   return call((sb) => sb.rpc("remove_player", args));
+}
+
+/**
+ * Any member of an ended game: the rematch (a new lobby with the same name,
+ * free_center and board, hosted by whoever asked first). Idempotent per old
+ * game, so the result may be a game someone else already started; then the
+ * caller is not a player in it yet (`host_user_id` is not theirs) and joins it
+ * with `joinGame(game.join_code, …)`.
+ */
+export function playAgain(gameId: string): Promise<Game> {
+  const args: Args<"play_again"> = { game_id: gameId };
+  return call((sb) => sb.rpc("play_again", args));
 }
 
 export function registerMedia(

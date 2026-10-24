@@ -11,6 +11,7 @@ import { PaperPage, PaperTitle } from "@/components/paper/PaperPage";
 import { SessionGate } from "@/components/providers/SessionGate";
 import { useSession } from "@/components/providers/SessionProvider";
 import { Recap } from "@/components/recap/Recap";
+import { RecapViewedTracker } from "@/components/providers/RecapViewedTracker";
 import { PencilButton, PencilLink, pencilButtonClass } from "@/components/ui/PencilButton";
 import { SkeletonLines } from "@/components/ui/Skeleton";
 import {
@@ -519,7 +520,15 @@ function GameBody({
         ) : (
           // Ended: the paper recap (its story viewer brings its own dark backdrop).
           <div className="flex min-w-0 flex-col gap-7" data-testid="game-ended">
-            <Recap game={game} players={result.players} squares={result.squares} media={result.media} headingLevel="h1" />
+            <RecapViewedTracker gameId={game.id} mediaCount={result.media.length} />
+            <Recap
+              game={game}
+              players={result.players}
+              squares={result.squares}
+              media={result.media}
+              headingLevel="h1"
+              playAgain={{ game, me: result.me, refresh: result.refresh }}
+            />
             <PencilLink
               href="/"
               variant="secondary"

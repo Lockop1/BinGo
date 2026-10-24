@@ -74,6 +74,12 @@ export type UseGameOptions = {
 const SYNCING_DELAY_MS = 400;
 /** Resync cadence on the recap: late uploads from other phones still appear. */
 export const ENDED_POLL_MS = 60_000;
+/**
+ * For this long after the end, while no rematch exists yet (`next_join_code`
+ * null), the recap keeps the live-game poll instead, so a "Play again" from
+ * another phone shows up within seconds even without Realtime events.
+ */
+export const REMATCH_WATCH_MS = 10 * 60_000;
 /** A fetch that raced a newer event or RPC result is retried this many times before merging anyway. */
 const RACE_RETRIES = 2;
 
@@ -125,7 +131,8 @@ const alwaysTrue = () => true;
  * - Resync: a full refetch on channel `SUBSCRIBED` (initial join and every
  *   reconnect), when the tab becomes visible, on `online`, and every
  *   `syncPollMs()` while visible (every ENDED_POLL_MS once the game has
- *   ended, for late uploads). Overlapping requests coalesce into one
+ *   ended, for late uploads; still `syncPollMs()` for REMATCH_WATCH_MS after
+ *   the end while no rematch exists). Overlapping requests coalesce into one
  *   follow-up fetch; the screen never shows a spinner for a resync (only
  *   `syncState`).
  * - Instant return: with `initial`, the cached snapshot is the first state
@@ -272,14 +279,36 @@ export function useGame(gameId: string, options: UseGameOptions = {}): UseGameRe
   }, [refresh]);
 
   // Gentle poll while the tab is visible; slow once the game has ended (the
-  // recap still picks up late uploads from other phones).
+  // recap still picks up late uploads from other phones), except right after
+  // the end while nobody has started a rematch yet.
   const ready = state.status === "ready";
   const ended = state.status === "ready" && effectiveStatus(state.game) === "ended";
+  const rematchWatchFrom =
+    state.status === "ready" && ended && !state.game.next_join_code
+      ? (state.game.ended_at ?? state.game.auto_end_at)
+      : null;
   useEffect(() => {
     if (!ready || !visible) return;
-    const timer = window.setInterval(() => void refresh(), ended ? ENDED_POLL_MS : syncPollMs());
-    return () => window.clearInterval(timer);
-  }, [ready, ended, visible, refresh]);
+    let timer = 0;
+    const every = (ms: number) => {
+      window.clearInterval(timer);
+      timer = window.setInterval(() => void refresh(), ms);
+    };
+    const watchLeft = rematchWatchFrom === null ? 0 : Date.parse(rematchWatchFrom) + REMATCH_WATCH_MS - Date.now();
+    let slowDown = 0;
+    if (!ended) {
+      every(syncPollMs());
+    } else if (watchLeft > 0) {
+      every(syncPollMs());
+      slowDown = window.setTimeout(() => every(ENDED_POLL_MS), watchLeft);
+    } else {
+      every(ENDED_POLL_MS);
+    }
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(slowDown);
+    };
+  }, [ready, ended, rematchWatchFrom, visible, refresh]);
 
   // The cached snapshot is still waiting for its first server answer: syncing (or offline).
   const syncState: SyncState = !online || failed ? "offline" : syncing || fromCache ? "syncing" : "live";

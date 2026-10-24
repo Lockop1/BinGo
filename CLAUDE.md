@@ -127,7 +127,8 @@ These are invariants. Every phase must keep all of them true.
 
 - **games**: `id`, `join_code` (8-char, unguessable), `name`, `host_user_id`, `status`
   (`lobby` | `active` | `ended`), `free_center` bool, `created_at`, `started_at`, `ended_at`,
-  `auto_end_at`, `expires_at` (`created_at` + 30 days).
+  `auto_end_at`, `expires_at` (`created_at` + 30 days), `next_game_id` / `next_join_code` (set by
+  `play_again`; the rematch lobby other players join with one tap).
 - **players**: `id`, `game_id`, `user_id`, `display_name`, `color`, `is_ready`, `joined_at`;
   unique (`game_id`, `user_id`); max 10 per game.
 - **squares**: `id`, `game_id`, `position` 0–24, `label`, `details`, `target_count` default 1,
@@ -156,6 +157,8 @@ tables directly.
 | `leave_game` | player (not the host) | lobby only; deletes the caller's player row |
 | `remove_player` | host only | lobby only; deletes another player's row (never the host's) |
 | `register_media` | player | records an uploaded object under the game's storage prefix |
+| `play_again` | player | ended (or overdue) games only; one rematch per game: creates (or returns) a new lobby with the same name, free center and board, hosted by the first caller; the old game points at it |
+| `peek_game_public(code)` | anyone, no session needed (`anon`) | link previews: name, effective status, player count, free center; unknown or expired codes are not found; the only function `anon` may execute |
 
 The free-space toggle is host-only and enforced in the RPC that applies it.
 
@@ -245,7 +248,8 @@ Source of truth: `supabase/migrations/` (schema + RLS, RPCs, storage). Types: `s
 - Errors: `error.code === "P0001"` and `error.message` is one of the stable snake_case codes below.
   Map codes to copy in the UI; never show raw messages. `error.code === "42501"` means the role has
   no privilege at all (e.g. called without a session); treat it as a bug.
-- Every RPC needs a signed-in (anonymous) user, otherwise `not_authenticated`.
+- Every RPC needs a signed-in (anonymous) user, otherwise `not_authenticated`, except
+  `peek_game_public`, which needs no session at all.
 - Game-scoped RPCs (everything taking `game_id`) answer `game_not_found` both for a nonexistent game
   and for a game the caller is not a player in, so membership cannot be probed.
 - **Effective status**: an `active` game whose `auto_end_at <= now()` is treated as ended by every RPC
@@ -273,6 +277,7 @@ Source of truth: `supabase/migrations/` (schema + RLS, RPCs, storage). Types: `s
 | `create_game(name text, host_name text, free_center boolean = true, squares jsonb = '[]')` | `games` row | any signed-in user; caller becomes host and player color 0 (`is_ready = false`); 25 squares created | `not_authenticated`, `invalid_name`, `invalid_display_name`, then per square: `invalid_squares` / `label_too_long` / `details_too_long` / `invalid_target_count`; `join_code_generation_failed` (practically never) |
 | `join_game(code text, display_name text)` | `players` row | any signed-in user; game in `lobby` or `active` (late join). Already a member: returns the existing row (any status) and updates `display_name` unless ended. New players get the lowest free color 0–9 | `not_authenticated`, `invalid_display_name`, `game_not_found`, `game_ended` (ended, overdue or expired), `game_full` (10 players) |
 | `peek_game(code text)` | `game_preview` | any signed-in user (join screen, no membership needed) | `not_authenticated`, `game_not_found` |
+| `peek_game_public(code text)` | `game_preview` | **anyone, including `anon` (no session)**: the same normalisation and result as `peek_game`, for link previews (Open Graph images, chat-app crawlers). Games past `expires_at` count as unknown. Call it with `peekGamePublic` from `lib/game/publicRpc.ts` (plain anon client, works in server code) | `game_not_found` (unknown, malformed or expired code) |
 | `set_ready(game_id uuid, ready boolean)` | `players` row (caller) | player; `lobby` only | `not_authenticated`, `game_not_found`, `game_not_in_lobby`, `invalid_argument` (`ready` null) |
 | `update_square(game_id uuid, position integer, label text, details text, target_count integer)` | `squares` row | any player; `lobby` only; replaces label/details/target (last write wins), `current_count` reset to 0 | `not_authenticated`, `game_not_found`, `game_not_in_lobby`, `invalid_position`, `label_too_long`, `details_too_long`, `invalid_target_count` |
 | `set_free_center(game_id uuid, enabled boolean)` | `games` row | host only; `lobby` only | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `invalid_argument` (`enabled` null) |
@@ -283,8 +288,14 @@ Source of truth: `supabase/migrations/` (schema + RLS, RPCs, storage). Types: `s
 | `end_game(game_id uuid)` | `games` row | host only; from `lobby` **or** `active` (in the lobby it is the host's way out, since the host cannot `leave_game`); sets `status = 'ended'`, `ended_at` (= `auto_end_at` if already overdue, else now). Already ended → returns row unchanged | `not_authenticated`, `game_not_found`, `not_host` |
 | `leave_game(game_id uuid)` | `boolean` (`true`) | any player except the host; `lobby` only. Deletes the caller's `players` row under the game lock (like `join_game`), freeing the slot and color for the next joiner. The caller is then a non-member (RLS hides the game); they may join again with the code | `not_authenticated`, `game_not_found`, `game_not_in_lobby`, `host_cannot_leave` |
 | `remove_player(game_id uuid, player_id uuid)` | `boolean` (`true`) | host only; `lobby` only. Deletes another player's row under the game lock (e.g. someone who wandered off without tapping Ready), so `start_game` is no longer blocked by them | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `not_allowed` (removing yourself), `player_not_found` (not a player of this game, e.g. already left) |
+| `play_again(game_id uuid)` | `games` row (the **new** game) | any player of the old game; the old game must be effectively ended (`ended`, or `active` past `auto_end_at`). Under the old game's row lock: if `next_game_id` is set and that game still exists, returns it unchanged (one rematch per game, whoever asks; a later caller is **not** joined, they `join_game(next_join_code, …)`). Otherwise creates a lobby exactly like `create_game` (fresh join code, `expires_at`, 25 squares) with the same `name` and `free_center`, squares copied by position (`label`, `details`, `target_count`; `current_count = 0`, nothing completed, no media; a free center that `start_game` labelled `'FREE'` goes back to blank), the caller as host and player color 0 under their `display_name` from the old game, `is_ready = false`; then sets the old row's `next_game_id` / `next_join_code` (members see it via RLS, Realtime and resync) | `not_authenticated`, `game_not_found`, `game_not_ended`, `join_code_generation_failed` (practically never) |
 | `register_media(game_id uuid, position integer, storage_path text, kind text)` | `media` row | any player; game `active` or `ended`, before `expires_at`; square must be completed. `storage_path` = `<game_id>/<segments>` where each segment matches `[A-Za-z0-9_-][A-Za-z0-9._-]*`, max 512 chars; `kind` is `'photo'` or `'video'`. Same path again by the same player/square → returns the existing row | `not_authenticated`, `game_not_found`, `game_not_started` (lobby), `game_expired`, `invalid_kind`, `invalid_storage_path`, `invalid_position`, `square_not_completed`, `invalid_storage_path` (path already used by someone else) |
 | `auto_end_due_games()` | `number` (games ended) | **service_role only** (cleanup cron); no `auth.uid()` check. Ends every `active` game with `auto_end_at <= now()`, setting `ended_at = auto_end_at` | `42501` for any other role |
+
+`peek_game_public` is deliberately the **single function `anon` may execute** (SQL test (n) checks
+the whole catalog): link previews are fetched by crawlers with no session, the join code is
+unguessable (40 random bits), and anyone holding the link already sees the same four fields on the
+join screen. `anon` still has no table access and no other function.
 
 Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs them):
 `is_game_member(game_id uuid) → boolean`, `is_game_host(game_id uuid) → boolean`,
@@ -292,7 +303,7 @@ Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs th
 
 ### Return shapes
 
-- `games`: `id, join_code, name, host_user_id, status ('lobby'|'active'|'ended'), free_center, created_at, started_at, ended_at, auto_end_at, expires_at`.
+- `games`: `id, join_code, name, host_user_id, status ('lobby'|'active'|'ended'), free_center, created_at, started_at, ended_at, auto_end_at, expires_at, next_game_id, next_join_code`. The last two are null until `play_again` creates the rematch; `next_join_code` is that game's `join_code`, so members of the old game can join it without being able to read it (`next_game_id` is nulled if the rematch is ever deleted). The client `Game` type marks them optional (snapshots cached by older builds lack them): read them with `?? null`.
 - `players`: `id, game_id, user_id, display_name, color (0–9 palette index), is_ready, joined_at`. "Me" is the row whose `user_id` equals the session user id.
 - `squares`: `id, game_id, position, label, details, target_count, current_count, completed_by_player_id (null + completed_at set = free center), completed_at (null = open), updated_at`.
 - `media`: `id, game_id, square_id, player_id, storage_path, kind ('photo'|'video'), created_at`.
@@ -312,6 +323,7 @@ Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs th
 | `game_full` | "This game is full (10 players)." |
 | `game_not_in_lobby` | "The game has already started." (lobby-only action) |
 | `game_not_active` | "The game isn't live." (lobby, ended, or past its 24h limit) |
+| `game_not_ended` | "The game isn't over yet." (`play_again` on a lobby or live game) |
 | `game_not_started` | "Media can be added once the game starts." |
 | `game_expired` | "This album has expired." |
 | `not_host` | "Only the host can do that." |
@@ -338,7 +350,8 @@ Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs th
 
 - **Reads**: `authenticated` may `select` from `games`, `players`, `squares`, `media` only for games it
   is a player in (RLS via `is_game_member`). Direct INSERT/UPDATE/DELETE fail with `42501`; all writes
-  go through the RPCs. `anon` has no table access at all.
+  go through the RPCs. `anon` has no table access at all (its only privilege is EXECUTE on
+  `peek_game_public`).
 - **Realtime**: all four tables are in `supabase_realtime` with `replica identity full`. Subscribe to
   `postgres_changes` with filter `game_id=eq.<id>` (`players`, `squares`, `media`) and `id=eq.<id>`
   (`games`); RLS decides who receives events. A square's `updated_at` strictly increases with every
@@ -453,6 +466,18 @@ compiler's printer, 2-space indent) and keep the header comment.
   `register_media`; wired in `defaultUploadQueue.ts`) → `applyMedia`. Display only through
   `signedUrls.ts` (1 h URLs, batches of 50, cached, re-signed 5 min before expiry). The recap
   (`components/recap`) builds items in board order, saves per item (share sheet / download) or zips all.
+- **Rematch** (`PlayAgainLink` in `components/recap/RecapSummary.tsx`, wired from `GameScreen` via
+  `Recap`'s `playAgain` prop; the media lab leaves it out): one small muted text link, the very last
+  thing in the recap summary. No `next_join_code` on the game → "Play again" (`playAgain` →
+  `track("play_again", { source: "recap" })` → `router.push('/game/<new id>')`; if the returned game is
+  someone else's, it first joins it). `next_join_code` set and the new game not readable (RLS: not a
+  player of it) → "A new game is ready · Join" (`joinGame(next_join_code, <my display_name here>)`).
+  Readable → "Go to the new game" ("You started a new game · Go to it" for its host). Errors show the
+  `GameError` copy in the same small style. The pointer arrives on the old `games` row via Realtime
+  and the resync: the recap refetches once on mount, and `useGame` keeps the live `syncPollMs()` poll
+  for `REMATCH_WATCH_MS` (10 min) after the end while `next_join_code` is null, instead of the 60 s
+  ended poll. `lib/game/publicRpc.ts` (`peekGamePublic`) is the session-less counterpart of `rpc.ts`
+  for server code: a plain `@supabase/supabase-js` anon client without auth persistence.
 - **PWA**: `public/sw.js` + pure `public/sw-policy.js` (unit-tested in `lib/pwa/swPolicy.test.ts`):
   only the app shell is cached (navigations network-first with a 3 s fallback, hashed `/_next/static`
   cache-first, icons / fonts / manifest stale-while-revalidate); Supabase, `/api`, RSC and non-GET

@@ -132,7 +132,7 @@ begin
 end
 $body$);
 
-select tests.run('n', 'anon (and PUBLIC) cannot execute any public function; authenticated/service_role execute exactly the intended ones', $body$
+select tests.run('n', 'anon executes exactly one function (peek_game_public), PUBLIC none; authenticated/service_role execute exactly the intended ones', $body$
 declare
   v_fn record;
   v_unexpected text;
@@ -149,7 +149,10 @@ begin
         where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e'
       )
   loop
-    perform tests.is(has_function_privilege('anon', v_fn.oid, 'EXECUTE'), false, 'anon EXECUTE ' || v_fn.sig);
+    -- peek_game_public is the one deliberate exception (link previews have no session).
+    perform tests.is(
+      has_function_privilege('anon', v_fn.oid, 'EXECUTE'), v_fn.sig = 'peek_game_public(text)',
+      'anon EXECUTE ' || v_fn.sig);
     perform tests.ok(
       not exists (select 1 from aclexplode(coalesce(
         (select proacl from pg_proc where oid = v_fn.oid),
@@ -157,6 +160,16 @@ begin
         where a.grantee = 0),
       'PUBLIC has no EXECUTE on ' || v_fn.sig);
   end loop;
+
+  select string_agg(sig, ', ' order by sig) into v_unexpected
+  from (
+    select p.oid::regprocedure::text as sig
+    from pg_proc p
+    where p.pronamespace = 'public'::regnamespace
+      and has_function_privilege('anon', p.oid, 'EXECUTE')
+      and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
+  ) x;
+  perform tests.is(v_unexpected, 'peek_game_public(text)', 'anon executes only peek_game_public');
 
   select string_agg(sig, ', ') into v_unexpected
   from (
@@ -172,6 +185,7 @@ begin
       'set_free_center(uuid,boolean)', 'start_game(uuid)', 'complete_square(uuid,integer)',
       'increment_square(uuid,integer,uuid)', 'undo_completion(uuid,integer)', 'end_game(uuid)',
       'register_media(uuid,integer,text,text)', 'leave_game(uuid)', 'remove_player(uuid,uuid)',
+      'peek_game_public(text)', 'play_again(uuid)',
       'is_game_member(uuid)', 'is_game_host(uuid)',
       'safe_uuid(text)', 'can_upload_game_media(uuid)'
     ])
@@ -199,10 +213,11 @@ begin
         or has_function_privilege('service_role', v_fn.oid, 'EXECUTE'),
       false, 'no API role executes ' || v_fn.sig);
   end loop;
-  perform tests.ok((select count(*) from pg_proc where pronamespace = 'private'::regnamespace) = 3, 'three private helpers');
+  perform tests.ok((select count(*) from pg_proc where pronamespace = 'private'::regnamespace) = 4, 'four private helpers');
 
-  -- And actually calling every RPC as anon is refused.
+  -- And actually calling every RPC as anon is refused, except the public peek.
   perform tests.login_anon();
+  perform tests.throws($q$select public.peek_game_public('ABCDEFGH')$q$, 'game_not_found', 'anon may peek publicly');
   foreach v_stmt in array array[
     $q$select public.create_game('x', 'y', true, '[]'::jsonb)$q$,
     $q$select public.join_game('ABCDEFGH', 'x')$q$,
@@ -218,6 +233,7 @@ begin
     $q$select public.register_media(gen_random_uuid(), 0, 'x/y', 'photo')$q$,
     $q$select public.leave_game(gen_random_uuid())$q$,
     $q$select public.remove_player(gen_random_uuid(), gen_random_uuid())$q$,
+    $q$select public.play_again(gen_random_uuid())$q$,
     $q$select public.auto_end_due_games()$q$,
     $q$select public.is_game_member(gen_random_uuid())$q$,
     $q$select public.is_game_host(gen_random_uuid())$q$,
@@ -258,7 +274,8 @@ begin
       'select public.register_media(%1$L, 0, %1$L || ''/0/x.jpg'', ''photo'')',
       'select public.increment_square(%L, 1, gen_random_uuid())',
       'select public.leave_game(%L)',
-      'select public.remove_player(%L, gen_random_uuid())'
+      'select public.remove_player(%L, gen_random_uuid())',
+      'select public.play_again(%L)'
     ] loop
       perform tests.throws(format(v_stmt, v_target), 'game_not_found', format(v_stmt, v_target));
     end loop;
@@ -295,10 +312,13 @@ begin
     $q$select public.register_media(gen_random_uuid(), 0, 'x/y', 'photo')$q$,
     $q$select public.increment_square(gen_random_uuid(), 0, gen_random_uuid())$q$,
     $q$select public.leave_game(gen_random_uuid())$q$,
-    $q$select public.remove_player(gen_random_uuid(), gen_random_uuid())$q$
+    $q$select public.remove_player(gen_random_uuid(), gen_random_uuid())$q$,
+    $q$select public.play_again(gen_random_uuid())$q$
   ] loop
     perform tests.throws(v_stmt, 'not_authenticated', v_stmt);
   end loop;
+  -- The public peek needs no subject at all (unknown code: plain game_not_found).
+  perform tests.throws($q$select public.peek_game_public('ABCDEFGH')$q$, 'game_not_found', 'peek_game_public without a subject');
   perform tests.is((select count(*) from public.games), 0::bigint, 'no rows visible without a subject');
 end
 $body$);
@@ -375,6 +395,7 @@ begin
     and p.proname in ('create_game', 'join_game', 'peek_game', 'set_ready', 'update_square',
       'set_free_center', 'start_game', 'complete_square', 'increment_square', 'undo_completion',
       'end_game', 'register_media', 'leave_game', 'remove_player', 'auto_end_due_games',
+      'peek_game_public', 'play_again',
       'is_game_member', 'is_game_host', 'can_upload_game_media')
     and not p.prosecdef;
   perform tests.is(v_bad, null, 'RPCs and membership helpers are SECURITY DEFINER');
