@@ -35,7 +35,7 @@ players' changes arrive through the resync poll, every 15 s by default or
 
 ```bash
 npm run backend:status          # or: npm run backend:reset && npm run backend:start
-npm run backend:env > .env.local
+node scripts/local-backend/cli.mjs env > .env.local   # (not via npm run: npm adds banner lines)
 npm run dev                     # NEXT_PUBLIC_ENABLE_SW=1 npm run dev to run the service worker too
 ```
 

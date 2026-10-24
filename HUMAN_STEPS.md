@@ -11,7 +11,7 @@ against a local Postgres + PostgREST + GoTrue stand-in (see
    database password somewhere; you need it for step 2.
 2. **Authentication → Sign In / Providers → Anonymous sign-ins → Enable**.
    (`supabase/config.toml` also has `enable_anonymous_sign_ins = true`, but the
-   hosted project needs the dashboard toggle or `supabase config push`.)
+   hosted project needs the dashboard toggle. Do NOT run `supabase config push`: `config.toml` holds local-only URLs.)
 3. **Project Settings → API**: copy the **Project URL**, the **anon public** key
    and the **service_role** key.
 4. On your machine, in the repo root, create `.env.local`:
@@ -31,7 +31,6 @@ npm install
 npx supabase login            # opens a browser for an access token
 npx supabase link --project-ref <ref>
 npx supabase db push          # applies supabase/migrations/* in order
-npx supabase config push      # optional: pushes config.toml (anonymous sign-ins etc.)
 ```
 
 Then verify in the dashboard: **Database → Replication** shows the
