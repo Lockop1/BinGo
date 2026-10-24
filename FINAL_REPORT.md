@@ -35,7 +35,7 @@ A mobile-first Next.js 16 + Supabase web app for friend-group activity bingo:
   `vercel.json`), 24-hour auto-end, `DEPLOY.md` checklist, a local
   PostgREST + GoTrue stand-in backend for end-to-end tests without Docker.
 
-Gates at hand-off: lint clean, production build OK, 351 unit tests, 28 SQL
+Gates at hand-off: lint clean, production build OK, 360 unit tests, 28 SQL
 tests, 24 Playwright specs (two-phone flows; +1 analytics spec run with a key),
 two independent verification passes in `VERIFICATION.md` with every finding
 fixed or explicitly deferred.
