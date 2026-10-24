@@ -22,3 +22,14 @@ Update the checkbox and status notes as each phase lands. See `CLAUDE.md` for in
   - Status notes: BUILT, DEPLOY PENDING HUMAN. `/api/cron/cleanup` (bearer CRON_SECRET, constant-time; auto_end_due_games → per-game storage walk + batch remove → row delete only on full success; per-game errors reported) + `vercel.json` daily cron; 24h auto-end (DB effective status + client timer); error/empty states (bad link, full, ended, not-member); `DEPLOY.md` checklist; Node engine pinned; anonymous identity preserved across transient refresh failures (browser session keeper + server proxy no longer clears cookies on transient errors); top-bar sync mark. Human: Vercel env vars + deploy (HUMAN_STEPS.md §4–5).
 - [x] **Phase 9 — Independent verification**
   - Status notes: DONE. Fresh agent re-ran all gates, did its own two-phone playthrough and RPC probes as non-members; report in `VERIFICATION.md`. Security/RLS/RPC boundaries held. Two Major product bugs (lost concurrent/offline counter taps; Leave not removing a player) and a harness drift gap were found and fixed (counter action ids + `square_increments`, `leave_game`/`remove_player`, drift guard), plus all Minor/Nit UI items; see the Resolution section. Final gates: lint clean, build OK, 314 unit tests, 24 SQL tests, 20 Playwright specs. Still unverifiable here: hosted Realtime latency, real Storage uploads/signed URLs, cron storage deletion, iOS Safari.
+
+## Phase 10 — Spec additions (2026-10-24)
+
+- [ ] **10a — Play again + public peek** (DB: `play_again`, `peek_game_public`, `games.next_game_id/next_join_code`; recap "Play again" text link + one-tap Join for existing players)
+  - Status notes: not started.
+- [ ] **10b — Logo and icon set + Open Graph previews for `/g/[code]`** (3×3 marker grid with a diagonal scribble; favicon/apple/192/512/maskable; `opengraph-image.tsx` in Whiteboard style with the logo)
+  - Status notes: not started.
+- [ ] **10c — Lightweight analytics** (PostHog free tier; events game_created, player_joined, game_started, square_completed, media_uploaded, game_ended, recap_viewed, play_again; no personal data)
+  - Status notes: not started.
+- [ ] **10d — TESTING.md** two-phone checklist
+  - Status notes: not started.
