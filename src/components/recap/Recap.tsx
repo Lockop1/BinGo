@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { RecapStory } from "@/components/recap/RecapStory";
-import { RecapSummary, type PlayAgainProps } from "@/components/recap/RecapSummary";
+import { RecapSummary } from "@/components/recap/RecapSummary";
 import { buildRecapItems, recapFileNames } from "@/components/recap/recapItems";
 import type { Game, Media, Player, Square } from "@/lib/game/types";
 import { getSignedUrls as defaultGetSignedUrls, type GetSignedUrls } from "@/lib/media/signedUrls";
@@ -15,8 +15,6 @@ type Props = {
   /** Defaults to real signed URLs from `game-media`; tests pass data: URLs. */
   getSignedUrls?: GetSignedUrls;
   headingLevel?: "h1" | "h2";
-  /** The ended game screen's rematch link (left out by the media lab). */
-  playAgain?: PlayAgainProps;
 };
 
 /** The ended game's recap: the paper summary, and the story viewer on "Watch the recap". */
@@ -27,7 +25,6 @@ export function Recap({
   media,
   getSignedUrls = defaultGetSignedUrls,
   headingLevel,
-  playAgain,
 }: Props) {
   const items = useMemo(() => buildRecapItems(media, squares, players), [media, squares, players]);
   const names = useMemo(() => recapFileNames(items), [items]);
@@ -44,7 +41,6 @@ export function Recap({
         getSignedUrls={getSignedUrls}
         onWatch={() => setOpen(true)}
         headingLevel={headingLevel}
-        playAgain={playAgain}
       />
       {open && items.length > 0 ? (
         <RecapStory items={items} names={names} getSignedUrls={getSignedUrls} onClose={() => setOpen(false)} />

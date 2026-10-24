@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { LIVE, expectPageFitsWidth, publicSupabaseEnv, rpcAs, selectAs, twoPhonesInActiveGame } from "./helpers";
 
 /**
  * "Play again" on the recap: a quiet text link at the very bottom of the
- * summary starts a new lobby with the same name and board (`play_again`),
+ * ended screen (below "Back to home") starts a new lobby with the same name
+ * and board (`play_again`),
  * and every other phone on the recap gets "A new game is ready · Join", one
  * tap into that lobby under the name it already had. The local backend never
  * delivers Realtime events: the old game's rematch pointer reaches the other
@@ -42,6 +43,51 @@ async function style(locator: Locator) {
       decoration: s.textDecorationLine,
     };
   });
+}
+
+/**
+ * Where the rematch link sits among everything else drawn on the page: the
+ * lowest bottom edge of any other visible in-flow element (ancestors of the link,
+ * its own contents and fixed overlays such as the dev tools badge are skipped).
+ */
+async function rematchPlacement(page: Page, linkTestId: string) {
+  return page.evaluate((testId) => {
+    const link = document.querySelector(`[data-testid="${testId}"]`);
+    const home = document.querySelector('[data-testid="back-home"]');
+    if (!link || !home) throw new Error("rematch link or back-home missing");
+    const inFixed = (el: Element) => {
+      for (let node: Element | null = el; node; node = node.parentElement) {
+        if (getComputedStyle(node).position === "fixed") return true;
+      }
+      return false;
+    };
+    const y = window.scrollY;
+    const linkBox = link.getBoundingClientRect();
+    let lowest = -Infinity;
+    let lowestWhat = "";
+    for (const el of document.body.querySelectorAll("*")) {
+      if (el.contains(link) || link.contains(el)) continue;
+      const box = el.getBoundingClientRect();
+      if (box.width === 0 || box.height === 0) continue;
+      const style = getComputedStyle(el);
+      if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) continue;
+      if (inFixed(el)) continue;
+      if (box.bottom + y > lowest) {
+        lowest = box.bottom + y;
+        lowestWhat = `${el.tagName.toLowerCase()}[data-testid=${el.getAttribute("data-testid") ?? ""}]`;
+      }
+    }
+    const homeBox = home.getBoundingClientRect();
+    return {
+      linkTop: linkBox.top + y,
+      linkBottom: linkBox.bottom + y,
+      linkCenterX: linkBox.left + linkBox.width / 2,
+      homeBottom: homeBox.bottom + y,
+      homeCenterX: homeBox.left + homeBox.width / 2,
+      otherLowest: lowest,
+      otherLowestWhat: lowestWhat,
+    };
+  }, linkTestId);
 }
 
 test("play again: a quiet link on the recap starts a rematch lobby with the same board; the other phone joins in one tap", async ({
@@ -84,33 +130,42 @@ test("play again: a quiet link on the recap starts a rematch lobby with the same
     }
   });
 
-  await test.step("on the friend's recap, Play again is the summary's last element: plain muted text, below Download all", async () => {
-    const summary = friend.getByTestId("recap-summary");
-    const last = summary.locator(":scope > *").last();
-    await expect(last).toHaveAttribute("data-testid", "rematch");
-    const link = last.getByTestId("play-again");
+  await test.step("on the friend's recap, Play again is the lowest thing on the page: plain muted text under Back to home", async () => {
+    const ended = friend.getByTestId("game-ended");
+    await expect(ended.locator(":scope > *").last()).toHaveAttribute("data-testid", "rematch");
+    const link = friend.getByTestId("play-again");
     await expect(link).toBeVisible();
 
-    const look = await style(link);
-    const muted = await style(friend.getByTestId("recap-download-note"));
-    const body = await style(friend.getByTestId("recap-expiry"));
-    expect(look.tag, "a plain button element").toBe("BUTTON");
-    expect(look.background, "no fill").toBe("rgba(0, 0, 0, 0)");
-    expect(look.backgroundImage).toBe("none");
-    expect(look.boxShadow, "no shadow").toBe("none");
-    expect(look.borderTop, "no border").toBe("0px");
-    expect(look.decoration, "underlined like a link").toContain("underline");
-    expect(look.color, "the muted ink colour").toBe(muted.color);
-    expect(look.fontSize, "smaller than the summary text").toBeLessThan(body.fontSize);
-    // Not a popup or overlay: it sits in the summary's flow, after the download.
-    expect(await link.evaluate((el) => getComputedStyle(el.parentElement!).position)).toBe("static");
+    for (const colorScheme of ["light", "dark"] as const) {
+      await friend.emulateMedia({ colorScheme });
+      await link.scrollIntoViewIfNeeded();
+      expect(friend.viewportSize()?.width, "phone width").toBe(375);
 
-    const download = await friend.getByTestId("recap-download-all").boundingBox();
-    const box = await link.boundingBox();
-    expect(download && box).toBeTruthy();
-    expect(box!.y, "below Download all").toBeGreaterThanOrEqual(download!.y + download!.height);
-    expect(box!.height, "still a comfortable tap target").toBeGreaterThanOrEqual(44);
-    await expectPageFitsWidth(friend, "on the recap with the rematch link");
+      const look = await style(link);
+      const muted = await style(friend.getByTestId("recap-download-note"));
+      const body = await style(friend.getByTestId("recap-expiry"));
+      expect(look.tag, "a plain button element").toBe("BUTTON");
+      expect(look.background, "no fill").toBe("rgba(0, 0, 0, 0)");
+      expect(look.backgroundImage).toBe("none");
+      expect(look.boxShadow, "no shadow").toBe("none");
+      expect(look.borderTop, "no border").toBe("0px");
+      expect(look.decoration, "underlined like a link").toContain("underline");
+      expect(look.color, `the muted ink colour (${colorScheme})`).toBe(muted.color);
+      expect(look.fontSize, "smaller than the summary text").toBeLessThan(body.fontSize);
+      // Not a popup or overlay: it sits in the page's flow, after Back to home.
+      expect(await link.evaluate((el) => getComputedStyle(el.parentElement!).position)).toBe("static");
+
+      const at = await rematchPlacement(friend, "play-again");
+      expect(at.linkTop, `below Back to home (${colorScheme})`).toBeGreaterThanOrEqual(at.homeBottom);
+      expect(
+        at.linkBottom,
+        `the lowest element on the page (${colorScheme}); next lowest: ${at.otherLowestWhat}`,
+      ).toBeGreaterThanOrEqual(at.otherLowest);
+      expect(Math.abs(at.linkCenterX - at.homeCenterX), "centred under Back to home").toBeLessThanOrEqual(2);
+      expect(at.linkBottom - at.linkTop, "still a comfortable tap target").toBeGreaterThanOrEqual(44);
+      await expectPageFitsWidth(friend, `on the recap with the rematch link (${colorScheme})`);
+    }
+    await friend.emulateMedia({ colorScheme: null });
   });
 
   let newId = "";
@@ -171,7 +226,10 @@ test("play again: a quiet link on the recap starts a rematch lobby with the same
   await test.step("the host's recap shows the join link within seconds; one tap joins under their existing name", async () => {
     const join = host.getByTestId("join-next");
     await expect(join).toHaveText("A new game is ready · Join", { timeout: 10_000 });
-    await expect(host.getByTestId("recap-summary").locator(":scope > *").last()).toHaveAttribute("data-testid", "rematch");
+    await expect(host.getByTestId("game-ended").locator(":scope > *").last()).toHaveAttribute("data-testid", "rematch");
+    const at = await rematchPlacement(host, "join-next");
+    expect(at.linkTop, "below Back to home").toBeGreaterThanOrEqual(at.homeBottom);
+    expect(at.linkBottom, `the lowest element; next lowest: ${at.otherLowestWhat}`).toBeGreaterThanOrEqual(at.otherLowest);
     await expect(host.getByTestId("play-again")).toHaveCount(0);
     await join.click();
     await expect(host).toHaveURL(new RegExp(`/game/${newId}$`));
@@ -217,6 +275,22 @@ test("play again: a quiet link on the recap starts a rematch lobby with the same
     // Still nothing else for anon: a table read without a session is refused.
     const table = await fetch(`${env!.url}/rest/v1/games?select=id&limit=1`, { headers: { apikey: env!.anonKey } });
     expect(table.ok).toBe(false);
+  });
+
+  await test.step("once the rematch has ended, the old recap offers nothing (play_again would only hand it back)", async () => {
+    await rpcAs(friendContext, "end_game", { game_id: newId });
+    // The host is a player of the rematch, so the link looks it up by a member select.
+    const lookup = host.waitForResponse(
+      (r) => r.url().includes("/rest/v1/games") && r.url().includes(`id=eq.${newId}`) && r.url().includes("auto_end_at"),
+    );
+    await host.goto(`/game/${gameId}`);
+    await expect(host.getByTestId("recap-summary")).toBeVisible(LIVE);
+    await expect(host.getByTestId("back-home")).toBeVisible();
+    await lookup;
+    // Give the answer a moment to render, then make sure no rematch link of any kind shows.
+    await host.waitForTimeout(500);
+    await expect(host.getByTestId("rematch")).toHaveCount(0);
+    await expect(host.getByTestId("game-ended").locator(":scope > *").last()).toHaveAttribute("data-testid", "back-home");
   });
 
   await close();

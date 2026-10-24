@@ -1,19 +1,14 @@
 "use client";
 
 import { Download, Play } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ColorChip } from "@/components/recap/ColorChip";
 import { completedLines } from "@/components/recap/lines";
 import { recapTotals, slug, squareTitle, type RecapItem } from "@/components/recap/recapItems";
 import { downloadAllZip, type ZipProgress } from "@/components/recap/save";
 import { PencilButton } from "@/components/ui/PencilButton";
-import { track } from "@/lib/analytics";
-import { errorCopy } from "@/lib/game/errors";
-import { joinGame, playAgain } from "@/lib/game/rpc";
 import { BOARD_SIZE, type Game, type Player, type Square } from "@/lib/game/types";
 import type { GetSignedUrls } from "@/lib/media/signedUrls";
-import { createClient } from "@/lib/supabase/client";
 
 type Props = {
   game: Pick<Game, "name" | "expires_at">;
@@ -25,8 +20,6 @@ type Props = {
   onWatch: () => void;
   /** "Night recap" is the page heading on the ended screen (h1), a section elsewhere (h2). */
   headingLevel?: "h1" | "h2";
-  /** The real ended game (not the media lab): the quiet rematch link at the very bottom. */
-  playAgain?: PlayAgainProps;
 };
 
 /** "Saturday, November 22" in the viewer's locale. */
@@ -46,7 +39,6 @@ export function RecapSummary({
   getSignedUrls,
   onWatch,
   headingLevel: Heading = "h2",
-  playAgain: rematch,
 }: Props) {
   const [zip, setZip] = useState<ZipState>({ kind: "idle" });
   // Counts only what is crossed off now; the album (items) keeps media from undone squares too.
@@ -182,137 +174,6 @@ export function RecapSummary({
         </div>
       )}
 
-      {rematch ? <PlayAgainLink {...rematch} /> : null}
     </section>
-  );
-}
-
-export type PlayAgainProps = {
-  game: Pick<Game, "id" | "next_game_id" | "next_join_code">;
-  /** This phone's player row in the ended game (its name carries over); nothing shows without it. */
-  me: Player | null;
-  /** Resync the ended game (its row carries the rematch pointer). */
-  refresh: () => Promise<void>;
-};
-
-/** What this phone may read of the rematch: only a player of it can select its row (RLS). */
-type NextGameAccess = { id: string; readable: boolean; hostUserId: string | null };
-
-function useNextGameAccess(nextGameId: string | null): NextGameAccess | null {
-  const [access, setAccess] = useState<NextGameAccess | null>(null);
-  useEffect(() => {
-    if (!nextGameId) return;
-    let cancelled = false;
-    void createClient()
-      .from("games")
-      .select("id, host_user_id")
-      .eq("id", nextGameId)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (cancelled || error) return;
-        setAccess({ id: nextGameId, readable: data !== null, hostUserId: data?.host_user_id ?? null });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [nextGameId]);
-  return access !== null && access.id === nextGameId ? access : null;
-}
-
-const REMATCH_LINK =
-  "inline-flex min-h-11 min-w-0 max-w-full items-center self-start text-left text-lg leading-7 text-ink-soft " +
-  "underline decoration-ink-faint decoration-1 underline-offset-4 focus-visible:outline-2 " +
-  "focus-visible:outline-offset-2 focus-visible:outline-ink disabled:cursor-default disabled:no-underline";
-
-/**
- * The rematch, as one small muted text link under everything else on the
- * recap (never a popup, banner or button-looking thing):
- *   - no rematch yet: "Play again" starts one (`play_again`) and opens its lobby;
- *   - a rematch exists and this phone is not in it: "A new game is ready · Join"
- *     joins it in one tap under this game's display name;
- *   - this phone is in it: "Go to the new game" (or "You started …" for its host).
- * The pointer arrives on the old game's row via Realtime / the resync (which
- * polls fast for a while after the end), and once right away on mount.
- */
-function PlayAgainLink({ game, me, refresh }: PlayAgainProps) {
-  const router = useRouter();
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const nextGameId = game.next_game_id ?? null;
-  const nextCode = game.next_join_code ?? null;
-  const access = useNextGameAccess(nextGameId);
-
-  // One fresh look when the recap opens: someone may have started a rematch already.
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-  // Leaving for the new game keeps the link pending; if this screen comes back
-  // (Back restores it), it starts out tappable again.
-  useEffect(() => () => setPending(false), []);
-
-  if (!me) return null;
-  const myName = me.display_name;
-  const myUserId = me.user_id;
-  const kind: "play" | "join" | "go" = !nextCode || !nextGameId ? "play" : access?.readable ? "go" : "join";
-
-  const run = async (action: () => Promise<string>) => {
-    setPending(true);
-    setError(null);
-    try {
-      const target = await action();
-      router.push(`/game/${target}`);
-      // Stays pending: this screen is on its way out.
-    } catch (e) {
-      setError(errorCopy(e));
-      setPending(false);
-    }
-  };
-
-  const onClick = () => {
-    if (pending) return;
-    if (kind === "go" && nextGameId) {
-      setPending(true);
-      router.push(`/game/${nextGameId}`);
-      return;
-    }
-    if (kind === "join" && nextCode) {
-      void run(async () => (await joinGame({ code: nextCode, display_name: myName })).game_id);
-      return;
-    }
-    void run(async () => {
-      const next = await playAgain(game.id);
-      track("play_again", { source: "recap" });
-      // Someone else's rematch got there first: join it under the same name.
-      if (next.host_user_id !== myUserId) {
-        return (await joinGame({ code: next.join_code, display_name: myName })).game_id;
-      }
-      return next.id;
-    });
-  };
-
-  const label = {
-    play: pending ? "Starting a new game…" : "Play again",
-    join: pending ? "Joining…" : "A new game is ready · Join",
-    go: access?.hostUserId === myUserId ? "You started a new game · Go to it" : "Go to the new game",
-  }[kind];
-
-  return (
-    <div className="-mt-1 flex min-w-0 flex-col" data-testid="rematch" data-kind={kind}>
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={pending}
-        aria-busy={pending || undefined}
-        className={REMATCH_LINK}
-        data-testid={kind === "play" ? "play-again" : kind === "join" ? "join-next" : "go-next"}
-      >
-        {label}
-      </button>
-      {error ? (
-        <p role="alert" className="text-lg leading-7 text-ink-soft" data-testid="rematch-error">
-          {error}
-        </p>
-      ) : null}
-    </div>
   );
 }

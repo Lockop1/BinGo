@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
   <!-- Pixel-hinted 16 px version of logo.svg (used only for favicon-16.png / favicon.ico):
        the master's 44/512 strokes land between pixels at this size and blur to grey, so the
-       grid is redrawn on whole pixels with the same colours and the same red winning line. -->
+       grid is redrawn on whole pixels with the same colours. The master's red scribble (three
+       offset passes) would blur into a smudge at 16 px, so it stays one clean diagonal here. -->
   <rect width="16" height="16" rx="3" fill="#fbf8ef"/>
   <g fill="#24272a" shape-rendering="crispEdges">
     <rect x="1" y="1" width="14" height="2"/>

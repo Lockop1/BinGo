@@ -611,3 +611,18 @@ Nothing blocks a deploy. Before or right after deploying:
 - shorten the card's CDN cache (P14).
 
 The rest are nits.
+
+## Phase 10 resolution (2026-10-24)
+
+- **P11** fixed in working tree: `PlayAgainLink` moved to `src/components/recap/PlayAgainLink.tsx` and rendered by `GameScreen` after "Back to home" (centred, muted, 44 px); `e2e/play-again.spec.ts` asserts it is the lowest in-flow element and below `back-home` at 375 px in light and dark.
+- **P12** fixed in cf914b4 (PostHog host must be cross-origin or strip `Cookie`; documented).
+- **P13** fixed in working tree: `/g/[code]` renders a `<Suspense><Connection/></Suspense>` marker (`await connection()`), the documented Next 16 way to make request-time metadata intentional; no dev log line and no overlay issue on `/g/<code>`; the preview stays uncached (live status and head count).
+  Seen while checking: in dev, crawler user agents (`htmlLimitedBots`, e.g. `facebookexternalhit`, `Twitterbot`) still log Next's own `Invariant: Route "/g/[code]" did not produce a static shell … This is a bug in Next.js`. It is pre-existing (the HEAD page logs it too), dev-only, answers 200 with the right tags and shows no overlay (bots only). `export const instant = false` silences it but also changes the route's prefetch hints, so it was not applied.
+- **P14** fixed in cf914b4 (card CDN cache shortened).
+- **P15** fixed in cf914b4 (`metadataBase` hardened against empty / invalid `NEXT_PUBLIC_APP_URL`).
+- **P16** fixed in working tree for the rematch: `play_again` is sent only when this call created the rematch (`createdRematch`: no known pointer before and the returned host is this phone; deduped per page load); one-tap Join and the lost-race join fallback send `player_joined` (`late_join` from the rematch's status). Still open by design: `game_ended` with `by: "auto"` (24 h auto-ends happen in the cron with no client to report them; `game_ended` stays host-only) and `recap_viewed.media_count` read once at mount.
+- **P17** deferred: pathological all-wide 60-char names only; needs width-based text measuring in the card.
+- **P18** deferred: framework-level 500 on malformed percent-encoding in production (also `/game/[id]`); needs a `proxy.ts` guard or an upstream fix.
+- **P19** deferred: rematch colours follow join order; keeping colours needs a `play_again` / `join_game` change in SQL.
+- **P20** fixed in working tree (UI half): the old recap looks up the rematch's effective status (member `select` when readable, else `peek_game_public(next_join_code)`, not-found = expired) and shows no rematch link once it has ended (`rematchKind` unit-tested, e2e step "once the rematch has ended…"). `play_again` accepting an expired old game is deferred (harmless; a migration).
+- **P21** fixed in working tree: the logo's red line is now a three-pass marker scribble (up, hooked turn, back down, half-way up) through the diagonal cell centres, same colours and widths; `logo-16.svg` keeps a single clean diagonal; every PNG and `favicon.ico` regenerated with `scripts/make-icons.mjs` and checked by eye at 192 px and 32 px.

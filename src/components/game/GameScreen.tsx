@@ -10,6 +10,7 @@ import { useUploadedMedia } from "@/components/media/useUploadedMedia";
 import { PaperPage, PaperTitle } from "@/components/paper/PaperPage";
 import { SessionGate } from "@/components/providers/SessionGate";
 import { useSession } from "@/components/providers/SessionProvider";
+import { PlayAgainLink } from "@/components/recap/PlayAgainLink";
 import { Recap } from "@/components/recap/Recap";
 import { RecapViewedTracker } from "@/components/providers/RecapViewedTracker";
 import { PencilButton, PencilLink, pencilButtonClass } from "@/components/ui/PencilButton";
@@ -527,7 +528,6 @@ function GameBody({
               squares={result.squares}
               media={result.media}
               headingLevel="h1"
-              playAgain={{ game, me: result.me, refresh: result.refresh }}
             />
             <PencilLink
               href="/"
@@ -538,6 +538,8 @@ function GameBody({
             >
               Back to home
             </PencilLink>
+            {/* The quiet rematch link is the very last thing on the recap, under Back to home. */}
+            <PlayAgainLink game={game} me={result.me} refresh={result.refresh} />
           </div>
         )}
       </div>

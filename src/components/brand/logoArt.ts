@@ -23,8 +23,13 @@ export const LOGO_GRID_PATHS: readonly string[] = [
   "M58 320 Q170 326 290 319 Q380 315 452 323",
 ];
 
-/** The winning line: two quick overlapping marker passes. */
+/**
+ * The winning line: one quick marker scribble through the three diagonal cell centres, in
+ * three visibly offset, slightly curved passes (up, a hooked turn and back down, then half-way
+ * up again), so it reads as a hand-drawn cross-off rather than a clean strike-through.
+ */
 export const LOGO_STRIKE: readonly { d: string; width: number }[] = [
-  { d: "M102 404 Q236 284 406 100", width: 48 },
-  { d: "M412 122 Q280 270 126 420", width: 30 },
+  { d: "M108 365 Q226 229 365 113", width: 48 },
+  { d: "M365 113 Q395 109 382 141 Q280 273 161 388", width: 30 },
+  { d: "M161 388 Q154 414 185 392 Q250 311 327 242", width: 30 },
 ];
