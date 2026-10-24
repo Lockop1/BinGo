@@ -25,7 +25,9 @@ Vercel does not read `.env.local`. Add every variable for **Production** and
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Prod + Preview | anon public key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Prod + Preview | **server-only**, used by `/api/cron/cleanup` only. Never add a `NEXT_PUBLIC_` prefix. |
 | `CRON_SECRET` | Prod (+ Preview) | long random string; Vercel Cron sends it as `Authorization: Bearer` |
-| `NEXT_PUBLIC_APP_URL` | Prod + Preview | the public origin used in invite links, e.g. `https://bingo-night.vercel.app` (Preview can use the preview URL or be left as the prod URL) |
+| `NEXT_PUBLIC_APP_URL` | Prod + Preview | the public origin used in invite links and Open Graph cards, e.g. `https://bingo-night.vercel.app` (Preview can use the preview URL or be left as the prod URL) |
+| `NEXT_PUBLIC_POSTHOG_KEY` | optional | PostHog project API key; analytics is off when empty |
+| `NEXT_PUBLIC_POSTHOG_HOST` | optional | `https://us.i.posthog.com` or `https://eu.i.posthog.com` |
 
 `NEXT_PUBLIC_*` values are inlined at **build** time. Changing them requires a
 redeploy, not just a restart.
@@ -61,6 +63,10 @@ Open the preview URL on two phones (or a phone and an incognito window):
       game-media** and confirm the object under `<game_id>/<position>/`.
 - [ ] Host ends the game → both phones land on the recap; photos load via
       signed URLs (private bucket).
+- [ ] Paste the invite link into iMessage/GroupMe → the card shows the game
+      name and the board image (Open Graph).
+- [ ] Tap the small "Play again" link at the bottom of the recap → new lobby;
+      the other phone's recap offers a one-tap Join.
 - [ ] Add to Home Screen on iPhone; reopen with Wi-Fi/cellular off → the
       shell still renders (service worker), game data honestly fails.
 

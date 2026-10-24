@@ -50,6 +50,22 @@ npm run dev
 Open http://localhost:3000 in a normal window and an incognito window; create
 a game in one, join it from the other.
 
+## 3b. Optional: analytics (PostHog free tier, ~3 min)
+
+1. https://posthog.com → new project (US or EU cloud). Copy the **Project API key**
+   (`phc_…`) and the ingestion host shown in the project settings
+   (`https://us.i.posthog.com` or `https://eu.i.posthog.com`).
+2. In the PostHog project settings, enable **Discard client IP data** so no IP
+   addresses are stored. The app already sends no names, codes, ids or URLs.
+3. Add to `.env.local` and to Vercel:
+
+   ```
+   NEXT_PUBLIC_POSTHOG_KEY=phc_...
+   NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+   ```
+
+   Leave both empty to run with analytics off.
+
 ## 4. Deploy to Vercel
 
 1. Import the GitHub repo in Vercel (framework preset: Next.js).
@@ -61,6 +77,7 @@ a game in one, join it from the other.
    - `CRON_SECRET` (Vercel Cron sends it as a bearer token to
      `/api/cron/cleanup`)
    - `NEXT_PUBLIC_APP_URL` = your production URL (e.g. `https://bingo-night.vercel.app`)
+   - `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST` (optional, see 3b)
 3. Deploy. `vercel.json` already schedules the daily cleanup cron.
 4. In Supabase **Authentication → URL Configuration**, set **Site URL** to the
    production URL and add it to **Redirect URLs**.
