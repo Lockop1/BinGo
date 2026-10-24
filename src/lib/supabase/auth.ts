@@ -1,13 +1,11 @@
-import {
-  isAuthApiError,
-  isAuthRetryableFetchError,
-  isAuthSessionMissingError,
-  type AuthChangeEvent,
-  type Session,
-} from "@supabase/supabase-js";
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { parseCookieHeader, stringFromBase64URL } from "@supabase/ssr";
 import { getSupabasePublicEnv } from "@/lib/env";
 import { createClient } from "@/lib/supabase/client";
+import { classifyRefreshError } from "@/lib/supabase/refreshErrors";
+
+// Shared with the server proxy (lib/supabase/proxy.ts); re-exported for existing callers.
+export { classifyRefreshError };
 
 /**
  * Silent anonymous identity (browser only).
@@ -66,36 +64,6 @@ export class SessionReconnectError extends Error {
 
 export function isSessionReconnectError(error: unknown): error is SessionReconnectError {
   return error instanceof SessionReconnectError;
-}
-
-const DEAD_TOKEN_CODES = new Set([
-  "refresh_token_not_found",
-  "refresh_token_already_used",
-  "session_not_found",
-  "session_expired",
-  "user_not_found",
-  "invalid_grant",
-]);
-// Legacy `{ error: "invalid_grant", error_description: "Invalid Refresh Token: …" }` bodies carry no
-// code; a malformed token gets `validation_failed` "Refresh token is not valid". Both are 400s.
-const DEAD_TOKEN_MESSAGE = /invalid refresh token|refresh token not found|refresh token is not valid|invalid_grant|already used/i;
-
-/**
- * `definitive` only when the server has said the refresh token can never work
- * again (case c). Everything else, including errors we do not recognise, is
- * `transient`: keeping a dead identity a little longer costs a retry, while
- * dropping a live one loses the phone's games.
- */
-export function classifyRefreshError(error: unknown): "transient" | "definitive" {
-  if (isAuthRetryableFetchError(error)) return "transient";
-  // auth-js maps a server `session_not_found` to this class.
-  if (isAuthSessionMissingError(error)) return "definitive";
-  if (isAuthApiError(error)) {
-    if (error.code && DEAD_TOKEN_CODES.has(error.code)) return "definitive";
-    const clientError = error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429;
-    if (clientError && DEAD_TOKEN_MESSAGE.test(error.message)) return "definitive";
-  }
-  return "transient";
 }
 
 /** SessionProvider's automatic retry schedule after a failed attempt: 1 s, 2 s, 4 s, 8 s, then every 15 s. */
