@@ -14,11 +14,13 @@ export const metadata: Metadata = {
   description: "Activity bingo for a night out with friends.",
   applicationName: "Bingo Night",
   icons: {
+    // favicon.ico (16 + 32 PNGs) for every browser, the SVG master where supported.
+    // All generated from public/icons/logo.svg by scripts/make-icons.mjs.
     icon: [
-      { url: "/icons/icon.svg", type: "image/svg+xml" },
-      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icons/logo.svg", type: "image/svg+xml" },
     ],
-    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+    apple: "/icons/apple-touch-icon.png",
   },
   appleWebApp: { capable: true, statusBarStyle: "default", title: "Bingo Night" },
 };
