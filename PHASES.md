@@ -31,5 +31,5 @@ Update the checkbox and status notes as each phase lands. See `CLAUDE.md` for in
   - Status notes: DONE. `public/icons/logo.svg` (3×3 marker grid + red diagonal scribble), favicon.ico + 16/32, apple 180, 192/512, maskable; `src/components/brand/Logo.tsx`; `/g/[code]` `generateMetadata` + `opengraph-image.tsx` (1200×630 whiteboard card via `peek_game_public`, bundled fonts, generic card for unknown codes). e2e `og.spec.ts`.
 - [x] **10c — Lightweight analytics** (PostHog free tier; events game_created, player_joined, game_started, square_completed, media_uploaded, game_ended, recap_viewed, play_again; no personal data)
   - Status notes: DONE. `posthog-js` behind `src/lib/analytics.ts` (lazy, off without `NEXT_PUBLIC_POSTHOG_KEY`/with DNT/GPC, memory persistence, strict per-event prop allow-list, sanitize + before_send). Events wired at success points; `AnalyticsProvider` in layout, `RecapViewedTracker` on the recap. 16 unit tests; e2e `analytics.spec.ts` (runs when the host ends in `/__ph`).
-- [ ] **10d — TESTING.md** two-phone checklist
-  - Status notes: not started.
+- [x] **10d — TESTING.md** two-phone checklist
+  - Status notes: DONE. 292-line real-device checklist (sections 0–13, every quoted label verified against the code, failure pointers, results table). Phase 10 independently verified (VERIFICATION.md "Phase 10 verification"): no Blocker/Major; minors P11–P21 fixed or deferred (see "Phase 10 resolution").

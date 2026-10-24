@@ -35,9 +35,30 @@ A mobile-first Next.js 16 + Supabase web app for friend-group activity bingo:
   `vercel.json`), 24-hour auto-end, `DEPLOY.md` checklist, a local
   PostgREST + GoTrue stand-in backend for end-to-end tests without Docker.
 
-Gates at hand-off: lint clean, production build OK, 314 unit tests, 24 SQL
-tests, 20 Playwright specs (two-phone flows), independent verification in
-`VERIFICATION.md` with every finding fixed or explicitly deferred.
+Gates at hand-off: lint clean, production build OK, 351 unit tests, 28 SQL
+tests, 24 Playwright specs (two-phone flows; +1 analytics spec run with a key),
+two independent verification passes in `VERIFICATION.md` with every finding
+fixed or explicitly deferred.
+
+## Spec additions (Phase 10)
+
+- **Open Graph invite cards**: `/g/<code>` serves title/description/Open Graph/Twitter tags and
+  a 1200×630 whiteboard-style PNG with the logo, game name, player count and code, rendered per
+  request from the new anon-only `peek_game_public` RPC (generic card for unknown codes).
+- **Logo and icon set**: a 3×3 marker grid with a red diagonal scribble on paper
+  (`public/icons/logo.svg`), exported to favicon.ico (16+32), apple-touch 180, 192/512 and a
+  maskable 512, plus an inline React `Logo` used on the card.
+- **Analytics**: PostHog free tier behind `src/lib/analytics.ts`, off unless
+  `NEXT_PUBLIC_POSTHOG_KEY` is set and the browser has no Do Not Track / Global Privacy
+  Control; memory persistence, no autocapture/pageviews/recordings/identify; eight events
+  (`game_created`, `player_joined`, `game_started`, `square_completed`, `media_uploaded`,
+  `game_ended`, `recap_viewed`, `play_again`) with a strict property allow-list, verified by
+  decoding intercepted payloads: no names, codes, ids or URLs.
+- **Play again**: a small muted text link at the very bottom of the recap creates one rematch
+  lobby per game (same name, free-space setting and squares, counts reset; the tapper hosts
+  under their old name); the other players' recaps offer "A new game is ready · Join", a
+  one-tap join under their existing names.
+- **TESTING.md**: a step-by-step two-phone checklist (45 min) using the exact on-screen copy.
 
 ## Live URL
 
@@ -49,11 +70,12 @@ pre-flight checklist.
 
 1. Create the Supabase project, enable Anonymous sign-ins, copy the URL and
    keys into `.env.local`.
-2. `npx supabase link` then `npx supabase db push` (4 migrations), then deploy
+2. `npx supabase link` then `npx supabase db push` (5 migrations), then deploy
    the matching app build right after.
 3. Smoke-test on two phones against the real project (Realtime, uploads,
    signed URLs, recap) — the one thing the local stand-in cannot prove.
-4. Vercel: import the repo, add the five env vars (service role key and
+4. Optional: a PostHog project and its two env vars (HUMAN_STEPS.md §3b).
+5. Vercel: import the repo, add the env vars (service role key and
    `CRON_SECRET` server-only), deploy, check the first cron run.
 5. Real-device pass on iPhone Safari and Android, add to home screen.
 
