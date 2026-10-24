@@ -168,7 +168,7 @@ export function Lobby({ game, players, squares, me, syncState, refresh, applyGam
 
   return (
     <div className="flex min-w-0 flex-col" data-testid="lobby">
-      <LobbyHeader name={game.name} syncState={syncState} onResync={() => void refresh()} />
+      <LobbyHeader gameId={game.id} name={game.name} syncState={syncState} onResync={() => void refresh()} />
       <InviteBlock code={game.join_code} gameName={game.name} />
       <PlayerList
         players={players}

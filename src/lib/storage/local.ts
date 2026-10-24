@@ -4,23 +4,23 @@
  * `null` and writes are silently dropped.
  */
 
+import type { ActiveGameRecord, LastEndedRecord } from "@/lib/game/activeGame";
+import type { PendingAction } from "@/lib/game/pendingActions";
 import type { StoredSettings } from "@/lib/settings/settings";
-
-export type ActiveGameRecord = {
-  gameId: string;
-  /** ISO timestamp of when this phone last opened the game. */
-  savedAt: string;
-};
 
 type LocalSchema = {
   "bingo.displayName": string;
-  /** Placeholder for Phase 7 (instant return to the active board). */
+  /** The game this phone last showed in lobby / active, with a snapshot to draw it instantly (validated on read, see lib/game/activeGame). */
   "bingo.activeGame": ActiveGameRecord;
+  /** The last game this phone saw end, so the next open lands on its recap once (validated on read). */
+  "bingo.lastEnded": LastEndedRecord;
   /** Board settings for this phone (validated field by field on read, see lib/settings). */
   "bingo.settings": StoredSettings;
 } & {
   /** Bingo line ids (and "blackout") this phone has already celebrated for a game. */
   [key: `bingo.celebrated.${string}`]: string[];
+  /** This phone's square actions for a game not yet confirmed by the server (validated item by item on read). */
+  [key: `bingo.pending.${string}`]: PendingAction[];
 };
 
 export type LocalKey = keyof LocalSchema;

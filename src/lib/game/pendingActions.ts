@@ -1,6 +1,7 @@
 import { toGameError, type GameErrorCode } from "@/lib/game/errors";
 import { isNewerSquare } from "@/lib/game/realtime";
 import type { Square, SquareResult } from "@/lib/game/types";
+import { readLocal, removeLocal, writeLocal } from "@/lib/storage/local";
 
 /**
  * Optimistic completions: a small queue of this phone's square actions
@@ -19,8 +20,14 @@ import type { Square, SquareResult } from "@/lib/game/types";
  *   error: the returned row (e.g. someone else got it first) simply wins.
  *   A definitive game error (`game_not_active`, `not_allowed`, …) drops the
  *   action and is reported once.
+ * - The game is over (`game_not_active` / `game_not_found`): the server will
+ *   refuse every other queued action of that game too, so they are all
+ *   dropped at once and listed in `dropped` for one short notice.
+ * - At most `maxActions` (~50) items wait; beyond that the oldest unsent one is
+ *   dropped (also listed in `dropped`), so the queue never grows unbounded.
  * - Queued items are plain JSON (no functions), saved through a pluggable
- *   `persistence` (memory by default; Phase 7 plugs in localStorage).
+ *   `persistence` (memory by default; `localPersistence(gameId)` keeps them in
+ *   localStorage under `bingo.pending.<gameId>` so they survive a reload).
  *
  * The server stays the authority: nothing here decides whether a completion
  * is allowed, it only predicts and then adopts what the RPC returns.
@@ -71,7 +78,8 @@ export type EnqueueResult =
   /** The new intent cancelled an unsent opposite one (e.g. undo of an unsent complete). */
   | { status: "cancelled"; clientId: string };
 
-export type SettleOutcome = "applied" | "not_applied" | "failed" | "skipped" | "cancelled";
+/** `dropped`: removed from the queue unsent because it grew past `maxActions`. */
+export type SettleOutcome = "applied" | "not_applied" | "failed" | "skipped" | "cancelled" | "dropped";
 
 export type Settled = {
   action: PendingAction;
@@ -85,12 +93,19 @@ export type Settled = {
 /** The latest RPC result row per square, held until a newer server row replaces it. */
 export type ResultEntry = { row: Square; kind: PendingKind; applied: boolean; clientId: string };
 
+/** Why a tap never reached the server: the game was already over, or the queue overflowed. */
+export type DropReason = "game_over" | "overflow";
+
+export type DroppedAction = { action: PendingAction; reason: DropReason; errorCode: GameErrorCode | null };
+
 export type PendingState = {
   actions: readonly PendingAction[];
   inFlight: readonly string[];
   results: Readonly<Record<string, ResultEntry>>;
   /** The last settled action per square (for the sheet: "Jake got it first", error copy). */
   outcomes: Readonly<Record<string, Settled>>;
+  /** Taps that were given up on, until the UI has shown its notice (`acknowledgeDropped`). */
+  dropped: readonly DroppedAction[];
 };
 
 export type PendingPersistence = {
@@ -113,6 +128,8 @@ export type PendingOptions = {
   createId?: () => string;
   baseBackoffMs?: number;
   maxBackoffMs?: number;
+  /** Queue cap; beyond it the oldest unsent action is dropped. */
+  maxActions?: number;
 };
 
 export type PendingStore = {
@@ -125,6 +142,8 @@ export type PendingStore = {
   /** Back online / back in the tab: retry everything now, ignoring backoff. */
   resume(): void;
   clearOutcome(gameId: string, position: number): void;
+  /** The notice for these dropped actions was shown (all of them when omitted). */
+  acknowledgeDropped(clientIds?: readonly string[]): void;
   /** Forget everything held for one game. */
   clearGame(gameId: string): void;
   dispose(): void;
@@ -132,6 +151,7 @@ export type PendingStore = {
 
 export const BASE_BACKOFF_MS = 1000;
 export const MAX_BACKOFF_MS = 30_000;
+export const MAX_PENDING_ACTIONS = 50;
 
 export function squareKey(gameId: string, position: number): string {
   return `${gameId}:${position}`;
@@ -144,6 +164,13 @@ const TRANSIENT = new Set<GameErrorCode>(["unknown", "not_authenticated"]);
 
 export function isDefinitiveError(code: GameErrorCode): boolean {
   return !TRANSIENT.has(code);
+}
+
+/** The game no longer takes completions (ended, past its 24 h, deleted, or not ours): nothing queued for it can land. */
+const GAME_OVER = new Set<GameErrorCode>(["game_not_active", "game_not_found"]);
+
+export function isGameOverError(code: GameErrorCode): boolean {
+  return GAME_OVER.has(code);
 }
 
 /** Exponential backoff for the n-th failed attempt (1-based), ±20% jitter, capped. */
@@ -191,6 +218,32 @@ export function memoryPersistence(initial: readonly unknown[] = []): PendingPers
   };
 }
 
+export function pendingKey(gameId: string): `bingo.pending.${string}` {
+  return `bingo.pending.${gameId}`;
+}
+
+/**
+ * localStorage persistence for one game's queue (`bingo.pending.<gameId>`).
+ * Reads never throw: corrupt JSON or a non-array is ignored, items are
+ * shape-checked (and must belong to this game) by `createPendingActions`.
+ * An empty queue removes the key.
+ */
+export function localPersistence(gameId: string): PendingPersistence {
+  const key = pendingKey(gameId);
+  return {
+    load() {
+      const value = readLocal(key) as unknown;
+      if (!Array.isArray(value)) return null;
+      return value.filter((item) => isPendingAction(item) && item.gameId === gameId);
+    },
+    save(actions) {
+      const mine = actions.filter((a) => a.gameId === gameId);
+      if (mine.length === 0) removeLocal(key);
+      else writeLocal(key, mine);
+    },
+  };
+}
+
 function defaultIsOnline(): boolean {
   return typeof navigator === "undefined" || navigator.onLine !== false;
 }
@@ -233,18 +286,30 @@ export function createPendingActions(options: PendingOptions): PendingStore {
     createId = defaultId,
     baseBackoffMs = BASE_BACKOFF_MS,
     maxBackoffMs = MAX_BACKOFF_MS,
+    maxActions = MAX_PENDING_ACTIONS,
   } = options;
   const setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
   const clearTimer = options.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>));
 
   // Restored items were possibly mid-flight: they count as attempted (in doubt).
-  const restored = (persistence.load() ?? []).filter(isPendingAction).map((a) => {
-    const copy = { ...a };
-    delete copy.nextAttemptAt;
-    return copy;
-  });
+  // Unreadable storage counts as empty; the newest `maxActions` are kept.
+  let loaded: readonly unknown[] = [];
+  try {
+    const value = persistence.load();
+    if (Array.isArray(value)) loaded = value;
+  } catch {
+    loaded = [];
+  }
+  const restored = loaded
+    .filter(isPendingAction)
+    .map((a) => {
+      const copy = { ...a };
+      delete copy.nextAttemptAt;
+      return copy;
+    })
+    .slice(-Math.max(1, maxActions));
 
-  let state: PendingState = { actions: restored, inFlight: [], results: {}, outcomes: {} };
+  let state: PendingState = { actions: restored, inFlight: [], results: {}, outcomes: {}, dropped: [] };
   const listeners = new Set<() => void>();
   const settledListeners = new Set<(settled: Settled) => void>();
   const timers = new Set<Timer>();
@@ -252,7 +317,13 @@ export function createPendingActions(options: PendingOptions): PendingStore {
 
   function commit(patch: Partial<PendingState>, persist: boolean) {
     state = { ...state, ...patch };
-    if (persist) persistence.save(state.actions);
+    if (persist) {
+      try {
+        persistence.save(state.actions);
+      } catch {
+        // Storage full or unavailable: the queue still lives in memory.
+      }
+    }
     listeners.forEach((listener) => listener());
   }
 
@@ -320,8 +391,49 @@ export function createPendingActions(options: PendingOptions): PendingStore {
     }
 
     commit({ actions: [...state.actions, action], outcomes: withoutOutcome(key) }, true);
+    trim();
     flush();
     return { status: "queued", action };
+  }
+
+  /** Over the cap: drop the oldest actions that are not on the wire (an in-flight one may still land). */
+  function trim() {
+    const excess = state.actions.length - Math.max(1, maxActions);
+    if (excess <= 0) return;
+    const victims = state.actions.filter((a) => !state.inFlight.includes(a.clientId)).slice(0, excess);
+    if (victims.length === 0) return;
+    const ids = new Set(victims.map((a) => a.clientId));
+    commit(
+      {
+        actions: state.actions.filter((a) => !ids.has(a.clientId)),
+        dropped: [...state.dropped, ...victims.map((action) => ({ action, reason: "overflow" as const, errorCode: null }))],
+      },
+      true,
+    );
+    victims.forEach((action) => emit({ action, outcome: "dropped", row: null, errorCode: null }));
+  }
+
+  /**
+   * The server said the game is over: every other unsent action of that game
+   * would get the same answer, so they go too (one notice for all of them).
+   */
+  function dropGame(failed: PendingAction, code: GameErrorCode) {
+    const rest = state.actions.filter(
+      (a) => a.gameId === failed.gameId && a.clientId !== failed.clientId && !state.inFlight.includes(a.clientId),
+    );
+    const ids = new Set(rest.map((a) => a.clientId));
+    const outcomes = { ...state.outcomes };
+    const settledRest: Settled[] = rest.map((action) => ({ action, outcome: "failed", row: null, errorCode: code }));
+    for (const settled of settledRest) outcomes[keyOf(settled.action)] = settled;
+    commit(
+      {
+        actions: state.actions.filter((a) => !ids.has(a.clientId)),
+        outcomes,
+        dropped: [...state.dropped, ...[failed, ...rest].map((action) => ({ action, reason: "game_over" as const, errorCode: code }))],
+      },
+      true,
+    );
+    settledRest.forEach(emit);
   }
 
   function schedule(ms: number) {
@@ -380,6 +492,7 @@ export function createPendingActions(options: PendingOptions): PendingStore {
         if (isDefinitiveError(code)) {
           state = { ...state, inFlight };
           settle(current, "failed", null, code);
+          if (isGameOverError(code)) dropGame(current, code);
         } else {
           const delay = backoffMs(current.attempts, { base: baseBackoffMs, max: maxBackoffMs, random });
           const retrying = { ...current, nextAttemptAt: now() + delay };
@@ -460,6 +573,16 @@ export function createPendingActions(options: PendingOptions): PendingStore {
       const key = squareKey(gameId, position);
       if (key in state.outcomes) commit({ outcomes: withoutOutcome(key) }, false);
     },
+    acknowledgeDropped(clientIds) {
+      if (state.dropped.length === 0) return;
+      if (!clientIds) {
+        commit({ dropped: [] }, false);
+        return;
+      }
+      const ids = new Set(clientIds);
+      const dropped = state.dropped.filter((d) => !ids.has(d.action.clientId));
+      if (dropped.length !== state.dropped.length) commit({ dropped }, false);
+    },
     clearGame(gameId) {
       const prefix = `${gameId}:`;
       const keep = <T,>(record: Readonly<Record<string, T>>) =>
@@ -469,6 +592,7 @@ export function createPendingActions(options: PendingOptions): PendingStore {
           actions: state.actions.filter((a) => a.gameId !== gameId),
           results: keep(state.results),
           outcomes: keep(state.outcomes),
+          dropped: state.dropped.filter((d) => d.action.gameId !== gameId),
         },
         true,
       );

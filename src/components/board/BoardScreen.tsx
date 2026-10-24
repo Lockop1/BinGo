@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { BoardGrid } from "@/components/board/BoardGrid";
 import { Celebration } from "@/components/board/Celebration";
@@ -11,11 +12,12 @@ import { TopBar } from "@/components/board/TopBar";
 import { RecapStory } from "@/components/recap/RecapStory";
 import { buildRecapItems, recapFileNames, type RecapItem } from "@/components/recap/recapItems";
 import { Sheet } from "@/components/ui/Sheet";
+import { goHomeOnPurpose } from "@/lib/game/activeGame";
 import { completedLines, isBlackout } from "@/lib/game/bingo";
 import { diffBoards, type BoardEvent, type DisplaySquare } from "@/lib/game/boardState";
 import { createCelebrationQueue, createCelebrationTracker } from "@/lib/game/celebrations";
 import { GAME_ERROR_COPY, errorCopy } from "@/lib/game/errors";
-import type { Settled } from "@/lib/game/pendingActions";
+import { isGameOverError, type Settled } from "@/lib/game/pendingActions";
 import { endGame } from "@/lib/game/rpc";
 import { timestampMicros } from "@/lib/game/realtime";
 import { createToastQueue, mediaToasts, type Toast, type ToastInput } from "@/lib/game/toasts";
@@ -35,6 +37,12 @@ export type BoardScreenProps = {
   media: Media[];
   me: Player | null;
   syncState: SyncState;
+  /**
+   * The board is still the cached snapshot (instant return) waiting for the
+   * first server answer: what that answer brings is old news (no toasts or
+   * parties for it), like a fresh load.
+   */
+  catchingUp?: boolean;
   refresh: () => Promise<void>;
   applyGame: (row: Game) => void;
   applySquare: (row: Square) => void;
@@ -110,6 +118,7 @@ export function BoardScreen({
   media,
   me,
   syncState,
+  catchingUp = false,
   refresh,
   applyGame,
   applySquare,
@@ -128,7 +137,8 @@ export function BoardScreen({
 
   const onSettled = useCallback(
     (settled: Settled) => {
-      if (settled.outcome === "failed" && settled.errorCode) {
+      // "The game is over" failures get one notice from the game screen (it outlives the board).
+      if (settled.outcome === "failed" && settled.errorCode && !isGameOverError(settled.errorCode)) {
         toasts.push({ text: GAME_ERROR_COPY[settled.errorCode], tone: "error", position: settled.action.position });
       }
     },
@@ -146,6 +156,8 @@ export function BoardScreen({
 
   // Toasts, haptics and celebrations from what changed on screen.
   const previous = useRef<DisplaySquare[] | null>(null);
+  // Catching up, plus the first board after it: the server's answer to a cached snapshot.
+  const settling = useRef(catchingUp);
   const meId = me?.id ?? null;
   useEffect(() => {
     const prev = previous.current;
@@ -157,9 +169,16 @@ export function BoardScreen({
       tracker.seed(lines, blackout);
       return;
     }
+    const oldNews = catchingUp || settling.current;
+    settling.current = catchingUp;
+    if (oldNews) {
+      // Lines the server reports are old news; this phone's own taps still celebrate.
+      const base = board.map((s) => s.base);
+      tracker.seed(completedLines(base), isBlackout(base));
+    }
     for (const event of diffBoards(prev, board, meId)) {
       if (event.type === "own_completed") pulse();
-      else toasts.push(toastFor(event, board, players, meId, host));
+      else if (!oldNews) toasts.push(toastFor(event, board, players, meId, host));
     }
     const fresh = tracker.observe(lines, blackout);
     if (fresh) {
@@ -173,20 +192,21 @@ export function BoardScreen({
       celebrations.push(fresh, { prompt: isHost, color });
       doublePulse();
     }
-  }, [board, meId, players, host, isHost, toasts, tracker, celebrations]);
+  }, [board, meId, players, host, isHost, toasts, tracker, celebrations, catchingUp]);
 
-  // "Jake added a photo to Skyline Chili": media from other phones after mount.
+  // "Jake added a photo to Skyline Chili": media from other phones after mount
+  // (not what the first answer to a cached snapshot brings).
   const seenMedia = useRef<Set<string> | null>(null);
   useEffect(() => {
     const seen = seenMedia.current;
-    if (seen === null) {
-      seenMedia.current = new Set(media.map((m) => m.id));
+    if (seen === null || catchingUp) {
+      seenMedia.current = new Set([...(seen ?? []), ...media.map((m) => m.id)]);
       return;
     }
     const news = mediaToasts(seen, media, { players, squares, meId });
     for (const m of media) seen.add(m.id);
     for (const t of news) toasts.push(t);
-  }, [media, players, squares, meId, toasts]);
+  }, [media, players, squares, meId, toasts, catchingUp]);
 
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -261,6 +281,7 @@ export function BoardScreen({
       data-square-size={settings.squareSize}
       data-testid="game-screen"
       data-status="active"
+      data-sync-state={syncState}
       data-celebrations={celebration.shown}
     >
       <TopBar
@@ -350,6 +371,19 @@ export function BoardScreen({
           error={endError}
           onEndGame={() => void endTheGame()}
         />
+        {/* Home on purpose: `/` stays home (with a "Back to your game" row) instead of jumping back here.
+            The sheet closes first: the router keeps this screen's state for the way back. */}
+        <Link
+          href="/"
+          onClick={() => {
+            goHomeOnPurpose(game.id);
+            setSheetOpen(false);
+          }}
+          data-testid="board-home"
+          className="mb-1 inline-flex min-h-11 items-center text-lg text-ink-soft underline decoration-ink-faint decoration-2 underline-offset-4"
+        >
+          Back to home
+        </Link>
       </Sheet>
 
       <Sheet open={sheetOpen && sheet?.kind === "settings"} onClose={closeSheet} title="Settings" testId="settings-sheet">

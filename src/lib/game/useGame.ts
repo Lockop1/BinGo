@@ -39,6 +39,11 @@ export type SyncState = "live" | "syncing" | "offline";
 export type UseGameResult = UseGameState & {
   /** The caller's player row, once loaded. */
   me: Player | null;
+  /**
+   * The server has answered at least once on this mount. False while the
+   * state shown is only the cached snapshot (bingo.activeGame).
+   */
+  confirmed: boolean;
   /** Re-fetch game, players, squares and media. Resolves when the new state is set. */
   refresh: () => Promise<void>;
   syncState: SyncState;
@@ -52,8 +57,23 @@ export type UseGameResult = UseGameState & {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+export type UseGameOptions = {
+  /**
+   * A cached snapshot of this game (bingo.activeGame), drawn at once with
+   * `syncState: 'syncing'` while the first fetch runs. The fetch then merges
+   * as usual (server rows win), or turns into `not_found`.
+   */
+  initial?: GameSnapshot | null;
+  /** False while there is no session yet: nothing is fetched (RLS would hide the game). Default true. */
+  enabled?: boolean;
+  /** Whose phone this is while the session is still being checked (the snapshot's saver). */
+  userIdHint?: string | null;
+};
+
 /** Only show `syncing` for a resync that takes longer than this (no flicker on fast polls). */
 const SYNCING_DELAY_MS = 400;
+/** Resync cadence on the recap: late uploads from other phones still appear. */
+export const ENDED_POLL_MS = 60_000;
 /** A fetch that raced a newer event or RPC result is retried this many times before merging anyway. */
 const RACE_RETRIES = 2;
 
@@ -104,13 +124,19 @@ const alwaysTrue = () => true;
  *   with the pure reducers in realtime.ts (stale square events are dropped).
  * - Resync: a full refetch on channel `SUBSCRIBED` (initial join and every
  *   reconnect), when the tab becomes visible, on `online`, and every
- *   `syncPollMs()` while visible and the game has not ended. Overlapping
- *   requests coalesce into one follow-up fetch; the screen never shows a
- *   spinner for a resync (only `syncState`).
+ *   `syncPollMs()` while visible (every ENDED_POLL_MS once the game has
+ *   ended, for late uploads). Overlapping requests coalesce into one
+ *   follow-up fetch; the screen never shows a spinner for a resync (only
+ *   `syncState`).
+ * - Instant return: with `initial`, the cached snapshot is the first state
+ *   (`ready`, `syncing`), so the board draws before the network answers.
  */
-export function useGame(gameId: string): UseGameResult {
+export function useGame(gameId: string, options: UseGameOptions = {}): UseGameResult {
+  const { initial = null, enabled = true, userIdHint = null } = options;
   const { userId } = useSession();
-  const [state, setState] = useState<UseGameState>({ status: "loading" });
+  const cached = initial !== null && initial.game.id === gameId ? initial : null;
+  const [state, setState] = useState<UseGameState>(() => (cached ? { status: "ready", ...cached } : { status: "loading" }));
+  const [fromCache, setFromCache] = useState(() => cached !== null);
   const [syncing, setSyncing] = useState(false);
   const [failed, setFailed] = useState(false);
   const online = useSyncExternalStore(subscribeOnline, isOnline, alwaysTrue);
@@ -145,6 +171,7 @@ export function useGame(gameId: string): UseGameResult {
       // protected by updated_at in mergeSnapshot).
       if (seqAtStart !== mutationSeq.current && attempt < RACE_RETRIES) continue;
       setFailed(false);
+      setFromCache(false);
       setState((prev) => {
         if (!snapshot) return { status: "not_found" };
         const held =
@@ -158,6 +185,8 @@ export function useGame(gameId: string): UseGameResult {
   }, [gameId]);
 
   const refresh = useCallback((): Promise<void> => {
+    // No session yet: RLS would answer "not found". The first fetch runs once it is ready.
+    if (!enabled) return Promise.resolve();
     if (running.current) {
       queued.current = true;
       return running.current;
@@ -177,7 +206,7 @@ export function useGame(gameId: string): UseGameResult {
     })();
     running.current = run;
     return run;
-  }, [fetchOnce]);
+  }, [fetchOnce, enabled]);
 
   /** Applies a reducer to the held snapshot (no-op until loaded). */
   const apply = useCallback((reduce: (snapshot: GameSnapshot) => GameSnapshot | null) => {
@@ -213,7 +242,7 @@ export function useGame(gameId: string): UseGameResult {
 
   // Realtime channel; SUBSCRIBED (first join or a reconnect) triggers a resync.
   useEffect(() => {
-    if (!UUID.test(gameId)) return;
+    if (!enabled || !UUID.test(gameId)) return;
     return subscribeToGame(gameId, {
       onGame: (change: RowChange<Game>) => apply((s) => {
         const game = applyGameChange(s.game, change);
@@ -226,7 +255,7 @@ export function useGame(gameId: string): UseGameResult {
         if (status === "SUBSCRIBED") void refresh();
       },
     });
-  }, [gameId, apply, refresh]);
+  }, [gameId, apply, refresh, enabled]);
 
   // Back to the tab, or back online: resync right away.
   useEffect(() => {
@@ -242,16 +271,19 @@ export function useGame(gameId: string): UseGameResult {
     };
   }, [refresh]);
 
-  // Gentle poll while the tab is visible and the game can still change.
+  // Gentle poll while the tab is visible; slow once the game has ended (the
+  // recap still picks up late uploads from other phones).
   const ready = state.status === "ready";
   const ended = state.status === "ready" && effectiveStatus(state.game) === "ended";
   useEffect(() => {
-    if (!ready || ended || !visible) return;
-    const timer = window.setInterval(() => void refresh(), syncPollMs());
+    if (!ready || !visible) return;
+    const timer = window.setInterval(() => void refresh(), ended ? ENDED_POLL_MS : syncPollMs());
     return () => window.clearInterval(timer);
   }, [ready, ended, visible, refresh]);
 
-  const syncState: SyncState = !online || failed ? "offline" : syncing ? "syncing" : "live";
-  const me = state.status === "ready" ? (state.players.find((p) => p.user_id === userId) ?? null) : null;
-  return { ...state, me, refresh, syncState, applyGame, applyPlayer, applySquare, applyMedia };
+  // The cached snapshot is still waiting for its first server answer: syncing (or offline).
+  const syncState: SyncState = !online || failed ? "offline" : syncing || fromCache ? "syncing" : "live";
+  const viewer = userId ?? userIdHint;
+  const me = state.status === "ready" && viewer ? (state.players.find((p) => p.user_id === viewer) ?? null) : null;
+  return { ...state, me, confirmed: !fromCache, refresh, syncState, applyGame, applyPlayer, applySquare, applyMedia };
 }

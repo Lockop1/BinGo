@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "r
 import { deriveBoard, type DisplaySquare } from "@/lib/game/boardState";
 import {
   createPendingActions,
-  memoryPersistence,
+  localPersistence,
   squareKey,
+  type DroppedAction,
   type PendingAction,
   type PendingState,
   type PendingStore,
@@ -28,28 +29,59 @@ function runPendingAction(action: PendingAction): Promise<SquareResult> {
   }
 }
 
-let shared: PendingStore | null = null;
+/** One queue per game (per tab), so nothing held for one game can leak into another. */
+const stores = new Map<string, PendingStore>();
+let listening = false;
+
+function resumeAll() {
+  stores.forEach((store) => store.resume());
+}
 
 /**
- * The app-wide queue (one per tab). Memory persistence for now; Phase 7 swaps
- * in a localStorage-backed `PendingPersistence` here so queued taps survive a
- * reload. Retries resume on `online` and when the tab becomes visible.
+ * The queue for one game, created on first use and hydrated from
+ * localStorage (`bingo.pending.<gameId>`), so taps made offline survive a
+ * reload and still show as overlays. Every queue retries right away on
+ * `online` and when the tab becomes visible; the screens also flush on mount.
  */
-export function getPendingStore(): PendingStore {
-  if (shared) return shared;
-  const store = createPendingActions({ run: runPendingAction, persistence: memoryPersistence() });
-  if (typeof window !== "undefined") {
-    window.addEventListener("online", () => store.resume());
+export function getPendingStore(gameId: string): PendingStore {
+  const existing = stores.get(gameId);
+  if (existing) return existing;
+  const store = createPendingActions({ run: runPendingAction, persistence: localPersistence(gameId) });
+  stores.set(gameId, store);
+  if (typeof window !== "undefined" && !listening) {
+    listening = true;
+    window.addEventListener("online", resumeAll);
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") store.resume();
+      if (document.visibilityState === "visible") resumeAll();
     });
   }
-  shared = store;
   return store;
 }
 
-const EMPTY: PendingState = { actions: [], inFlight: [], results: {}, outcomes: {} };
+const EMPTY: PendingState = { actions: [], inFlight: [], results: {}, outcomes: {}, dropped: [] };
 const serverSnapshot = () => EMPTY;
+
+export type PendingQueue = {
+  /** Taps given up on (game already over, or queue overflow) whose notice has not been shown yet. */
+  dropped: readonly DroppedAction[];
+  acknowledge: (clientIds?: readonly string[]) => void;
+};
+
+/**
+ * The game screen's handle on this game's queue, whatever it shows (board,
+ * recap, not found): sends anything restored from storage on mount, and
+ * exposes what was dropped so one notice can explain it even after the board
+ * has gone (e.g. the game ended while the taps waited offline).
+ */
+export function usePendingQueue(gameId: string): PendingQueue {
+  const store = getPendingStore(gameId);
+  const state = useSyncExternalStore(store.subscribe, store.getState, serverSnapshot);
+  useEffect(() => {
+    store.flush();
+  }, [store]);
+  const acknowledge = useCallback((clientIds?: readonly string[]) => store.acknowledgeDropped(clientIds), [store]);
+  return { dropped: state.dropped, acknowledge };
+}
 
 export type BoardStateOptions = {
   /** Fold a settled action's row into the game state (useGame's applySquare). */
@@ -88,7 +120,7 @@ export function useBoardState(
   me: Player | null,
   options: BoardStateOptions = {},
 ): BoardState {
-  const store = getPendingStore();
+  const store = getPendingStore(gameId);
   const state = useSyncExternalStore(store.subscribe, store.getState, serverSnapshot);
   const board = useMemo(() => deriveBoard(squares, gameId, state), [squares, gameId, state]);
 

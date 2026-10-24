@@ -14,6 +14,7 @@ import {
   stamp,
   tick,
 } from "@/lib/game/testFixtures";
+import { mergeSnapshot } from "@/lib/game/realtime";
 import type { Square } from "@/lib/game/types";
 
 let ids = 0;
@@ -242,5 +243,64 @@ describe("diffBoards", () => {
     const before = view(board({ 2: { target_count: 15, current_count: 1 } }));
     const after = view(board({ 2: { target_count: 15, current_count: 2, updated_at: stamp(3) }, 12: completedBy(null, 3) }));
     expect(diffBoards(before, after, ME)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Instant return: the board drawn from the cached snapshot, then reconciled
+
+describe("hydration from the cached snapshot", () => {
+  const game = {
+    id: GAME_ID,
+    join_code: "ABCD2345",
+    name: "Friday night",
+    host_user_id: "user-host",
+    status: "active" as const,
+    free_center: true,
+    created_at: stamp(1),
+    started_at: stamp(1),
+    ended_at: null,
+    auto_end_at: "2026-10-24T21:00:00.000Z",
+    expires_at: "2026-11-22T21:00:00.000Z",
+  };
+  const snapshotOf = (squares: Square[]) => ({ game, players: [], squares, media: [] });
+
+  it("restored taps show on the snapshot board before the network answers", () => {
+    const cached = board({ 0: completedBy(JAKE, 2), 2: { target_count: 15, current_count: 3, updated_at: stamp(2) } });
+    const restored = [action("complete", 5, { attempts: 1 }), action("increment", 2, { expectedCount: 3 })];
+    const view = deriveBoard(cached, GAME_ID, { actions: restored, results: {} });
+    expect(at(view, 0)).toMatchObject({ completed_by_player_id: JAKE, pending: false });
+    expect(at(view, 5)).toMatchObject({ completed_by_player_id: ME, pending: true, pendingKind: "complete" });
+    expect(at(view, 2)).toMatchObject({ current_count: 4, pending: true });
+  });
+
+  it("server rows win over the snapshot; this phone's taps stay on top until they settle", () => {
+    const cached = board({ 2: { target_count: 15, current_count: 3, updated_at: stamp(2) } });
+    const fetched = board({
+      // Jake got 5 while this phone was closed; 6 was touched but is still open; 2 moved to 5/15.
+      5: completedBy(JAKE, 7),
+      6: { updated_at: stamp(8) },
+      2: { target_count: 15, current_count: 5, updated_at: stamp(9) },
+      0: completedBy(HOST, 10),
+    });
+    const merged = mergeSnapshot(snapshotOf(cached), snapshotOf(fetched)).squares;
+    expect(merged[0]).toBe(fetched[0]);
+    expect(merged[5]).toBe(fetched[5]);
+
+    const restored = [action("complete", 5), action("complete", 6), action("increment", 2, { expectedCount: 3 })];
+    const view = deriveBoard(merged, GAME_ID, { actions: restored, results: {} });
+    // Someone else got it first: the server's completer shows, nothing pending to explain.
+    expect(at(view, 5)).toMatchObject({ completed_by_player_id: JAKE, pending: false });
+    // Still open on the server: the pending completion stays crossed off.
+    expect(at(view, 6)).toMatchObject({ completed_by_player_id: ME, pending: true });
+    // The count moved past the one this +1 was tapped on: the server's count shows (the RPC will adopt it).
+    expect(at(view, 2)).toMatchObject({ current_count: 5, pending: false });
+    expect(at(view, 0)).toMatchObject({ completed_by_player_id: HOST });
+  });
+
+  it("an older or equal fetched row never reverts a newer held one", () => {
+    const held = board({ 3: completedBy(ME, 6) });
+    const stale = board({ 3: { updated_at: stamp(5) } });
+    expect(mergeSnapshot(snapshotOf(held), snapshotOf(stale)).squares[3]).toBe(held[3]);
   });
 });

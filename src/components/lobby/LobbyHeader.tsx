@@ -1,13 +1,16 @@
 import Link from "next/link";
 import { LogOut } from "lucide-react";
 import { SyncDot } from "@/components/lobby/SyncDot";
+import { leaveToHome } from "@/lib/game/activeGame";
 import type { SyncState } from "@/lib/game/useGame";
 
 export function LobbyHeader({
+  gameId,
   name,
   syncState,
   onResync,
 }: {
+  gameId: string;
   name: string;
   syncState: SyncState;
   onResync: () => void;
@@ -18,6 +21,8 @@ export function LobbyHeader({
         <SyncDot state={syncState} onResync={onResync} />
         <Link
           href="/"
+          // Forget this game on the phone (membership stays) so `/` shows home, not the lobby again.
+          onClick={() => leaveToHome(gameId)}
           data-testid="leave-lobby"
           className="-mr-2 inline-flex min-h-11 items-center gap-1.5 px-2 text-lg text-ink-soft underline decoration-ink-faint decoration-2 underline-offset-4"
         >

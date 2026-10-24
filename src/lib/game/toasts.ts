@@ -153,3 +153,28 @@ export function mediaToasts(seen: ReadonlySet<string>, media: readonly MediaLike
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Taps that never reached the server
+
+type DroppedLike = { action: { position: number }; reason: "game_over" | "overflow" };
+
+/**
+ * One short line per reason for taps the queue gave up on, e.g. "Couldn't
+ * save Sing on stage — the game had already ended" (or "3 squares" when
+ * several squares are affected). `labelFor` names a square by position.
+ */
+export function droppedNotices(dropped: readonly DroppedLike[], labelFor: (position: number) => string): string[] {
+  const lines: string[] = [];
+  const reasons: [DroppedLike["reason"], string][] = [
+    ["game_over", "the game had already ended"],
+    ["overflow", "too many taps were waiting offline"],
+  ];
+  for (const [reason, why] of reasons) {
+    const positions = [...new Set(dropped.filter((d) => d.reason === reason).map((d) => d.action.position))];
+    if (positions.length === 0) continue;
+    const what = positions.length === 1 ? labelFor(positions[0]) : `${positions.length} squares`;
+    lines.push(`Couldn't save ${what} — ${why}`);
+  }
+  return lines;
+}

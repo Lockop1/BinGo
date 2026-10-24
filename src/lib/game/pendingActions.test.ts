@@ -1,21 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deriveBoard } from "@/lib/game/boardState";
 import {
   MAX_BACKOFF_MS,
+  MAX_PENDING_ACTIONS,
   backoffMs,
   createPendingActions,
   isDefinitiveError,
+  isGameOverError,
   isPendingAction,
+  localPersistence,
   memoryPersistence,
+  pendingKey,
   squareKey,
+  type PendingAction,
   type PendingOptions,
   type Settled,
 } from "@/lib/game/pendingActions";
+import { droppedNotices } from "@/lib/game/toasts";
 import {
   GAME_ID,
   JAKE,
   ME,
   NETWORK,
   PG,
+  board,
   completedBy,
   deferredRunner,
   manualClock,
@@ -364,5 +372,306 @@ describe("pendingActions", () => {
     off();
     store.enqueue(complete(4));
     expect(seen).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 7: localStorage persistence, game-over drops, the cap
+
+class MemoryStorage {
+  data = new Map<string, string>();
+  getItem(key: string) {
+    return this.data.has(key) ? this.data.get(key)! : null;
+  }
+  setItem(key: string, value: string) {
+    this.data.set(key, String(value));
+  }
+  removeItem(key: string) {
+    this.data.delete(key);
+  }
+}
+
+const OTHER_GAME = "22222222-2222-4222-8222-222222222222";
+const inc = (position: number, expectedCount: number) => ({
+  kind: "increment" as const,
+  gameId: GAME_ID,
+  position,
+  playerId: ME,
+  expectedCount,
+});
+
+describe("localStorage persistence", () => {
+  let local: MemoryStorage;
+  beforeEach(() => {
+    local = new MemoryStorage();
+    vi.stubGlobal("window", { localStorage: local, addEventListener: () => {}, removeEventListener: () => {} });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** A queue for GAME_ID backed by the stubbed localStorage, like the app's (offline unless told). */
+  function phone(online = false, runner = deferredRunner()) {
+    let ids = 0;
+    const store = createPendingActions({
+      run: runner.run,
+      persistence: localPersistence(GAME_ID),
+      isOnline: () => online,
+      createId: () => `p${++ids}-${Math.random().toString(36).slice(2, 6)}`,
+    });
+    return { store, runner };
+  }
+
+  it("keeps plain JSON under bingo.pending.<gameId> and removes the key once the queue is empty", async () => {
+    const { store } = phone();
+    store.enqueue(complete(5));
+    const raw = local.getItem(pendingKey(GAME_ID));
+    expect(raw).not.toBeNull();
+    const saved = JSON.parse(raw!) as PendingAction[];
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({ kind: "complete", gameId: GAME_ID, position: 5, playerId: ME, attempts: 0 });
+    expect(saved.every(isPendingAction)).toBe(true);
+    store.dispose();
+
+    const online = phone(true);
+    expect(online.runner.calls).toHaveLength(0); // nothing goes out before a flush
+    online.store.flush();
+    online.runner.calls[0].resolve(result(square(5, completedBy(ME, 4)), true));
+    await tick();
+    expect(local.getItem(pendingKey(GAME_ID))).toBeNull();
+  });
+
+  it("pending items survive a reload and still show as overlays on the snapshot board", () => {
+    const before = phone();
+    before.store.enqueue(complete(5));
+    before.store.enqueue(inc(2, 0));
+    before.store.dispose();
+
+    // Reload: a new queue for the same game, hydrated from storage, over the cached snapshot rows.
+    const after = phone();
+    expect(after.store.getState().actions.map((a) => [a.kind, a.position])).toEqual([
+      ["complete", 5],
+      ["increment", 2],
+    ]);
+    const snapshotRows = board({ 2: { target_count: 15 } });
+    const shown = deriveBoard(snapshotRows, GAME_ID, after.store.getState());
+    expect(shown[5]).toMatchObject({ completed_by_player_id: ME, pending: true, pendingKind: "complete" });
+    expect(shown[2]).toMatchObject({ current_count: 1, pending: true, pendingKind: "increment" });
+  });
+
+  it("ignores corrupt JSON, non-arrays, junk items and another game's items", () => {
+    local.setItem(pendingKey(GAME_ID), "{oops");
+    expect(phone().store.getState().actions).toEqual([]);
+    local.setItem(pendingKey(GAME_ID), JSON.stringify({ kind: "complete" }));
+    expect(phone().store.getState().actions).toEqual([]);
+
+    const good: PendingAction = {
+      clientId: "a1",
+      kind: "complete",
+      gameId: GAME_ID,
+      position: 5,
+      playerId: ME,
+      createdAt: "2026-10-23T21:30:00.000Z",
+      attempts: 1,
+      nextAttemptAt: 123,
+    };
+    local.setItem(
+      pendingKey(GAME_ID),
+      JSON.stringify([null, 7, { ...good, kind: "explode" }, { ...good, clientId: "a2", gameId: OTHER_GAME }, good]),
+    );
+    const restored = phone().store.getState().actions;
+    expect(restored).toHaveLength(1);
+    expect(restored[0].clientId).toBe("a1");
+    // Restored items were possibly in flight: still in doubt (attempts kept), backoff forgotten.
+    expect(restored[0].attempts).toBe(1);
+    expect(restored[0].nextAttemptAt).toBeUndefined();
+  });
+
+  it("restored items are sent in tap order per square", async () => {
+    const before = phone();
+    before.store.enqueue(inc(2, 0));
+    before.store.enqueue(inc(2, 1));
+    before.store.enqueue(complete(7));
+    before.store.dispose();
+
+    const { store, runner } = phone(true);
+    store.flush();
+    expect(runner.calls.map((c) => [c.action.position, c.action.expectedCount])).toEqual([
+      [2, 0],
+      [7, undefined],
+    ]);
+    runner.calls[0].resolve(result(square(2, { target_count: 15, current_count: 1, updated_at: stamp(2) }), true));
+    await tick();
+    expect(runner.calls[2].action).toMatchObject({ position: 2, expectedCount: 1 });
+  });
+
+  it("a restored completion the server already has (applied=false) just adopts the row", async () => {
+    const before = phone(true);
+    before.store.enqueue(complete(5)); // sent, then the page reloaded before the answer
+    before.store.dispose();
+
+    const { store, runner } = phone(true);
+    const settled: Settled[] = [];
+    store.onSettled((s) => settled.push(s));
+    store.flush();
+    expect(runner.calls[0].action.attempts).toBe(2);
+    runner.calls[0].resolve(result(square(5, completedBy(ME, 6)), false));
+    await tick();
+    expect(settled).toEqual([expect.objectContaining({ outcome: "not_applied", errorCode: null })]);
+    expect(store.getState().results[squareKey(GAME_ID, 5)].row.completed_by_player_id).toBe(ME);
+    expect(store.getState().actions).toEqual([]);
+    expect(store.getState().dropped).toEqual([]);
+    expect(local.getItem(pendingKey(GAME_ID))).toBeNull();
+  });
+
+  it("only writes its own game's items", () => {
+    const persistence = localPersistence(GAME_ID);
+    persistence.save([
+      { clientId: "x", kind: "complete", gameId: OTHER_GAME, position: 1, playerId: ME, createdAt: "t", attempts: 0 },
+    ]);
+    expect(local.getItem(pendingKey(GAME_ID))).toBeNull();
+  });
+});
+
+describe("game over and the queue cap", () => {
+  it("game_not_active drops every queued action of that game, each reported once", async () => {
+    const { store, runner, setOnline, settled } = setup();
+    setOnline(false);
+    store.enqueue(inc(2, 0));
+    store.enqueue(inc(2, 1));
+    store.enqueue(complete(3));
+    setOnline(true);
+    store.resume();
+    expect(runner.calls.map((c) => c.action.position)).toEqual([2, 3]);
+
+    runner.calls[1].reject(PG("game_not_active"));
+    await tick();
+    // The unsent +1 behind the in-flight one is dropped too; the in-flight one is left to land.
+    expect(store.getState().actions.map((a) => a.expectedCount)).toEqual([0]);
+    expect(store.getState().dropped.map((d) => [d.action.position, d.reason, d.errorCode])).toEqual([
+      [3, "game_over", "game_not_active"],
+      [2, "game_over", "game_not_active"],
+    ]);
+
+    runner.calls[0].reject(PG("game_not_active"));
+    await tick();
+    expect(store.getState().actions).toEqual([]);
+    expect(store.getState().dropped).toHaveLength(3);
+    expect(runner.calls).toHaveLength(2); // nothing else was sent
+    expect(settled.filter((s) => s.outcome === "failed")).toHaveLength(3);
+    expect(new Set(settled.map((s) => s.action.clientId)).size).toBe(3);
+  });
+
+  it("game_not_found (game deleted, or not ours) drops the same way", async () => {
+    const { store, runner } = setup();
+    store.enqueue(complete(3));
+    runner.calls[0].reject(PG("game_not_found"));
+    await tick();
+    expect(store.getState().dropped).toEqual([
+      expect.objectContaining({ reason: "game_over", errorCode: "game_not_found" }),
+    ]);
+    expect(isGameOverError("game_not_found")).toBe(true);
+    expect(isGameOverError("not_allowed")).toBe(false);
+  });
+
+  it("other definitive errors drop only their own action, without a notice", async () => {
+    const { store, runner, setOnline } = setup();
+    setOnline(false);
+    store.enqueue({ kind: "undo", gameId: GAME_ID, position: 6, playerId: ME, expectedCompleter: JAKE });
+    store.enqueue(complete(3));
+    setOnline(true);
+    store.resume();
+    runner.calls[0].reject(PG("not_allowed"));
+    await tick();
+    expect(store.getState().actions.map((a) => a.position)).toEqual([3]);
+    expect(store.getState().dropped).toEqual([]);
+  });
+
+  it("never holds more than maxActions: the oldest unsent tap is dropped, with a notice", () => {
+    const { store, setOnline, settled } = setup({ maxActions: 3 });
+    setOnline(false);
+    for (let n = 0; n < 5; n++) store.enqueue(inc(2, n));
+    const state = store.getState();
+    expect(state.actions.map((a) => a.expectedCount)).toEqual([2, 3, 4]);
+    expect(state.dropped.map((d) => [d.action.expectedCount, d.reason])).toEqual([
+      [0, "overflow"],
+      [1, "overflow"],
+    ]);
+    expect(settled.map((s) => s.outcome)).toEqual(["dropped", "dropped"]);
+    expect(MAX_PENDING_ACTIONS).toBe(50);
+  });
+
+  it("an action already on the wire is never the one dropped", () => {
+    const { store, runner } = setup({ maxActions: 2 });
+    store.enqueue(inc(2, 0)); // in flight
+    store.enqueue(inc(2, 1));
+    store.enqueue(inc(2, 2));
+    expect(runner.calls).toHaveLength(1);
+    expect(store.getState().actions.map((a) => a.expectedCount)).toEqual([0, 2]);
+    expect(store.getState().dropped.map((d) => d.action.expectedCount)).toEqual([1]);
+  });
+
+  it("a restored queue keeps only the newest maxActions", () => {
+    const items = Array.from({ length: 5 }, (_, n) => ({
+      clientId: `r${n}`,
+      kind: "increment",
+      gameId: GAME_ID,
+      position: 2,
+      playerId: ME,
+      expectedCount: n,
+      createdAt: "t",
+      attempts: 0,
+    }));
+    const store = createPendingActions({
+      run: deferredRunner().run,
+      persistence: memoryPersistence(items),
+      isOnline: () => false,
+      maxActions: 3,
+    });
+    expect(store.getState().actions.map((a) => a.clientId)).toEqual(["r2", "r3", "r4"]);
+  });
+
+  it("acknowledgeDropped clears the notice list, by id or all at once", () => {
+    const { store, setOnline } = setup({ maxActions: 1 });
+    setOnline(false);
+    store.enqueue(inc(2, 0));
+    store.enqueue(inc(2, 1));
+    store.enqueue(inc(2, 2));
+    const [first, second] = store.getState().dropped.map((d) => d.action.clientId);
+    store.acknowledgeDropped([first]);
+    expect(store.getState().dropped.map((d) => d.action.clientId)).toEqual([second]);
+    store.acknowledgeDropped();
+    expect(store.getState().dropped).toEqual([]);
+  });
+
+  it("a persistence that throws never breaks the queue", () => {
+    const store = createPendingActions({
+      run: deferredRunner().run,
+      persistence: {
+        load: () => {
+          throw new Error("SecurityError");
+        },
+        save: () => {
+          throw new Error("QuotaExceededError");
+        },
+      },
+      isOnline: () => false,
+    });
+    expect(store.getState().actions).toEqual([]);
+    expect(store.enqueue(complete(3)).status).toBe("queued");
+    expect(store.getState().actions).toHaveLength(1);
+  });
+
+  it("the notice is one short line per reason", () => {
+    const label = (position: number) => (position === 3 ? "Sing on stage" : `square ${position + 1}`);
+    const d = (position: number, reason: "game_over" | "overflow") => ({ action: { position }, reason });
+    expect(droppedNotices([], label)).toEqual([]);
+    expect(droppedNotices([d(3, "game_over")], label)).toEqual(["Couldn't save Sing on stage — the game had already ended"]);
+    // Several taps on one counter square still name the square.
+    expect(droppedNotices([d(3, "game_over"), d(3, "game_over")], label)).toEqual([
+      "Couldn't save Sing on stage — the game had already ended",
+    ]);
+    expect(droppedNotices([d(3, "game_over"), d(7, "game_over"), d(2, "overflow")], label)).toEqual([
+      "Couldn't save 2 squares — the game had already ended",
+      "Couldn't save square 3 — too many taps were waiting offline",
+    ]);
   });
 });
