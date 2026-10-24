@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Bebas_Neue, Patrick_Hand, Permanent_Marker } from "next/font/google";
+import { AnalyticsProvider } from "@/components/providers/AnalyticsProvider";
 import { SessionProvider } from "@/components/providers/SessionProvider";
 import { ServiceWorkerRegistration } from "@/components/pwa/ServiceWorkerRegistration";
 import "./globals.css";
@@ -10,6 +11,8 @@ const marker = Permanent_Marker({ variable: "--font-marker", weight: "400", subs
 const scoreboard = Bebas_Neue({ variable: "--font-scoreboard", weight: "400", subsets: ["latin"] });
 
 export const metadata: Metadata = {
+  // Absolute base for Open Graph image URLs; /g/[code] also sets it per route.
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"),
   title: "Bingo Night",
   description: "Activity bingo for a night out with friends.",
   applicationName: "Bingo Night",
@@ -44,6 +47,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col">
         <SessionProvider>{children}</SessionProvider>
         <ServiceWorkerRegistration />
+        <AnalyticsProvider />
       </body>
     </html>
   );
