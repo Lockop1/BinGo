@@ -28,6 +28,8 @@ Schema changes go through Supabase CLI migrations in `supabase/migrations/` (see
 
 ## Analytics
 
+Keep `NEXT_PUBLIC_POSTHOG_HOST` on PostHog's own origin (`us.i.posthog.com` / `eu.i.posthog.com`). Do not proxy it through a same-origin rewrite: same-origin requests would carry the Supabase auth cookies.
+
 Optional, privacy-first product analytics via PostHog (`src/lib/analytics.ts`). It is off
 unless `NEXT_PUBLIC_POSTHOG_KEY` is set (`NEXT_PUBLIC_POSTHOG_HOST` defaults to
 `https://us.i.posthog.com`), and off for browsers sending Do Not Track or Global Privacy

@@ -10,9 +10,18 @@ const pencil = Patrick_Hand({ variable: "--font-pencil", weight: "400", subsets:
 const marker = Permanent_Marker({ variable: "--font-marker", weight: "400", subsets: ["latin"] });
 const scoreboard = Bebas_Neue({ variable: "--font-scoreboard", weight: "400", subsets: ["latin"] });
 
+// An unset or empty NEXT_PUBLIC_APP_URL must never crash the root layout.
+function safeBaseUrl(value: string | undefined): URL {
+  try {
+    return new URL(value && value.trim() ? value.trim() : "http://localhost:3000");
+  } catch {
+    return new URL("http://localhost:3000");
+  }
+}
+
 export const metadata: Metadata = {
   // Absolute base for Open Graph image URLs; /g/[code] also sets it per route.
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"),
+  metadataBase: safeBaseUrl(process.env.NEXT_PUBLIC_APP_URL),
   title: "Bingo Night",
   description: "Activity bingo for a night out with friends.",
   applicationName: "Bingo Night",

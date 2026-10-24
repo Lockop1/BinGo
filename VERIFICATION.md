@@ -350,3 +350,264 @@ Status of every finding above after the follow-up work. "Fixed in 0e6beed" is th
 - 8 (overlap / cramping not asserted): **partly fixed**: board spec asserts the Undo target size; the 320 px layouts were checked by screenshot only.
 - 9 (`reuseExistingServer` may reuse a dev server without the e2e env): **deferred**: the global setup checks the backend, not the dev server's environment; start `npm run e2e` with no dev server running (or with the same env) until a check exists.
 - 4–7 and 10 (server rejections through PostgREST, Realtime, real Storage, untested flows, PG 16 shim): **deferred**: they need a hosted project or new specs; covered by the DEPLOY.md smoke test until then.
+
+---
+
+## Phase 10 verification (2026-10-24)
+
+**Scope:** 10a Play again + `peek_game_public`, 10b logo / icons / Open Graph cards for `/g/[code]`, 10c PostHog analytics. Independent agent that did not build these; nothing was fixed. This section is the only change to the repo (`git status` shows only `VERIFICATION.md`).
+**Environment:** local stand-in backend (`127.0.0.1:54321`), Postgres 16 (`bingo_local` for REST probes, `bingo_test` for SQL), Chromium via Playwright, `next dev` on :3000 and `next start` (production build) on :3100.
+**Evidence** (scratchpad, outside the repo): `/tmp/claude-0/-home-user-BinGo/8bb7be13-4a03-5c1c-a267-bab4a95a5cb6/scratchpad/`
+- scripts: `v10-probe.mjs` (RPC/RLS probe), `v10-embed.mjs` (PostgREST FK embed), `v10-cron.sql` (cron vs rematch FK), `v10-og.mjs` (unfurl + card timings), `v10-ux.mjs` (two phones + outsider, recap screenshots, analytics capture), `v10-icons/` (real-size icon render);
+- logs: `v10-*.log`; screenshots: `v10-ux-nokey/`, `v10-ux-key/` (+ `payloads.json`), `v10-og-prod/`, `v10-og-dev/`, `v10-icons/`.
+
+### 10.1 Gate results
+
+| Gate | Result | Exact output |
+| --- | --- | --- |
+| `npm run lint` | **pass** (exit 0) | no output besides the npm banner |
+| `npm run build` | **pass** (exit 0) | Next.js 16.4.3 (Turbopack), TypeScript OK, 9/9 static pages; new route `ƒ /g/[code]/opengraph-image`; `/g/[code]` ◐ |
+| `npm run test` | **pass** (exit 0) | `Test Files 26 passed (26)`, `Tests 351 passed (351)` |
+| `npm run db:test` | **pass** (exit 0) | `==> 28 passed, 0 failed` (new: (y) `peek_game_public`, (z) / (aa) `play_again`, (ab) 6-session race) |
+| `npm run e2e` | **pass** (exit 0) | `24 passed, 1 skipped (4.4m)`; the skip is `analytics.spec.ts` |
+| analytics spec, run properly | **pass** | Skip condition: `test.skip(!/\/__ph\/?$/.test(process.env.NEXT_PUBLIC_POSTHOG_HOST))`, so it only runs when the Playwright process itself has that env var and a dev server built with the key is already listening. Ran `NEXT_PUBLIC_POSTHOG_KEY=phc_test NEXT_PUBLIC_POSTHOG_HOST=http://127.0.0.1:3000/__ph NEXT_PUBLIC_ENABLE_SW=1 NEXT_PUBLIC_SYNC_POLL_MS=1500 npm run dev -- --hostname 127.0.0.1 --port 3000`, then `E2E_SKIP_BACKEND_CHECK=1 NEXT_PUBLIC_POSTHOG_HOST=http://127.0.0.1:3000/__ph npx playwright test e2e/analytics.spec.ts` → `1 passed (29.7s)`. Server stopped afterwards |
+
+Dev-server noise seen during e2e (not a failure): every `/g/<code>` request logs `Error: Route "/g/[code]": Next.js encountered uncached data in generateMetadata()` (see P13).
+
+### 10.2 Findings
+
+No Blocker or Major. The security core of 10a held under every probe I could run.
+
+**P11. "Play again" is not at the very bottom of the recap. Severity: Minor (misses the brief).**
+- **Repro:** end a game, then scroll the recap to the bottom at 375 px (`v10-ux-nokey/recap-light-full.png`, `recap-dark-full.png`).
+- **Expected:** a small text link below everything on the recap.
+- **Actual:** the link (y = 486, 67×44 px) sits above the full-width outlined "Back to home" button (y = 558, 307×45 px). The link is the last child of `RecapSummary`, but `GameScreen` renders `Back to home` after `<Recap>`. `e2e/play-again.spec.ts` only checks "last element of the summary", so it passes.
+- Everything else about the link matches the brief: muted ink (`rgb(98,103,108)` light / `rgb(183,176,162)` dark), 18 px, underlined, no fill, border or shadow, static position, 44 px tall, no horizontal scroll.
+- **Files:** `src/components/game/GameScreen.tsx` (ended branch), `src/components/recap/RecapSummary.tsx`, `e2e/play-again.spec.ts`.
+- **Suggestion:** render the rematch link after `Back to home`, and assert it is the lowest element on the page.
+
+**P12. With a same-origin PostHog host, every analytics POST carries the Supabase auth cookie. Severity: Minor (depends on configuration).**
+- **Repro:** analytics on with `NEXT_PUBLIC_POSTHOG_HOST=http://127.0.0.1:3000/__ph`; capture the requests (`v10-ux-key/payloads.json`).
+- **Actual:** each `POST /__ph/e/` has `cookie: sb-127-auth-token=base64-…` (about 1300 chars: the access and refresh tokens).
+- **Impact:** a same-origin reverse proxy (PostHog's recommended Next.js `/ingest` rewrite against ad blockers) would forward the anonymous session tokens to PostHog. The documented cross-origin hosts (`https://us|eu.i.posthog.com`) do not receive our cookies, and `Referer` was origin-only (`http://127.0.0.1:3000/`).
+- **Files:** `src/lib/analytics.ts`, `DEPLOY.md` / `HUMAN_STEPS.md` §3b.
+- **Suggestion:** document "PostHog host must be cross-origin, or strip `Cookie` in the rewrite"; or refuse a same-origin `api_host`.
+
+**P13. Dev error on every `/g/[code]` request. Severity: Minor (developer experience; production unaffected).**
+- **Error:** `Next.js encountered uncached data in generateMetadata()`, from `peek_game_public` in `generateMetadata`.
+- **Effect:** the dev overlay shows a red "1 Issue" badge on every phone that came through an invite link (`v10-ux-nokey/recap-dark-full.png`).
+- **Scope:** `next build` passes, and `next start` logs nothing.
+- **File:** `src/app/g/[code]/page.tsx`.
+- **Suggestion:** add the documented `<Suspense><Connection/></Suspense>` dynamic marker (`node_modules/next/dist/docs/.../generate-metadata.md`, "With Cache Components").
+
+**P14. The OG card can be about a day staler than the text next to it. Severity: Minor.**
+- **What happens:** the card is served with `Cache-Control: public, max-age=300, s-maxage=3600, stale-while-revalidate=86400`, and the image URL is the same for the life of a build (`/g/<code>/opengraph-image?26eae99ccb932628`).
+- **Effect:** a CDN may show "1 player in · Tap to join" for up to about 25 h after the game filled up or ended. Meanwhile `og:description` comes from no-store HTML and says "This game has ended."
+- **File:** `src/app/g/[code]/opengraph-image.tsx`.
+- **Suggestion:** use `s-maxage=300` with no long SWR, or leave the live count and status off the image.
+
+**P15. An empty `NEXT_PUBLIC_APP_URL` crashes the root layout. Severity: Minor (from reading the code; not run).**
+- **Cause:** `src/app/layout.tsx` does `metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000")`. `??` does not catch `""`, and `new URL("")` throws `Invalid URL` (checked in node). A scheme-less value like `bingo.example` throws too.
+- **Trigger:** `.env.example` ships `NEXT_PUBLIC_APP_URL=` empty. `page.tsx`'s `appBase()` and `links.ts` handle an empty value; the layout does not.
+- **Not run:** I could not confirm whether this fails `next build` or every request. A scratch build outside the repo cannot resolve `next` (Turbopack workspace root).
+- **Suggestion:** `||` plus try/catch, falling back to `VERCEL_PROJECT_PRODUCTION_URL` / localhost.
+
+**P16. Analytics undercounts or miscounts. Severity: Nit.**
+- The one-tap rematch Join, and `play_again`'s join fallback, never send `player_joined` (in `RecapSummary.tsx` only `play_again` is tracked).
+- `game_ended` with `by: "auto"` is in the schema but never sent, so 24 h auto-ends are invisible.
+- `play_again` is sent even when the caller lost the race and only joined someone else's rematch.
+- `recap_viewed.media_count` is read once at mount (it was `0` in my run because there was no media; it can also be 0 before media loads).
+
+**P17. A very wide game name runs into the board on the card. Severity: Nit.**
+- **Repro:** a 60-character all-"W" name: the clamped two-line heading's "…" runs past the 590 px text column into the board (`v10-og-prod/card-wide60.png`).
+- A realistic 57-character name clamps cleanly (`card-long.png`).
+- **Files:** `src/lib/og/preview.ts` (`headingFontSize` counts characters, not width), `opengraph-image.tsx`.
+
+**P18. Malformed percent-encoding in a dynamic route returns 500 in production. Severity: Nit (framework-level; also affects `/game/[id]`).**
+- `/g/%ZZ`, `/g/%`, `/g/%E0%A4%A`, `/g/%E0%A4%A/opengraph-image` and `/game/%E0%A4%A` all return `500 Internal Server Error` on `next start`; dev returns 400.
+- There is no stack trace in the body and nothing in the server log. Everything else I tried never returned 500 (list in 10.4).
+
+**P19. Rematch players change colours. Severity: Nit.**
+- Whoever taps Play again first becomes colour 0, and the others get the next free colour as they join.
+- In my run the friend went from orange to red and the old host went from red to orange (`v10-ux-nokey/host-joined-lobby.png`).
+
+**P20. "Go to the new game" also shows for an ended rematch, and `play_again` accepts an expired old game. Severity: Nit.**
+- Once the rematch has itself ended, `play_again(old)` returns it (probe: `status=ended`). The old recap still says "Go to the new game", which lands on another recap.
+- `play_again` has no `expires_at` check (a game in the window between expiry and the cron can spawn a rematch). Harmless, but inconsistent with `peek_game_public`.
+
+**P21. Logo: the "scribble" reads as a clean strike-through. Severity: Nit (see 10.6).**
+
+### 10.3 Probe results
+
+All probes are REST against `127.0.0.1:54321` unless marked psql. Log: `v10-probe.log` (69 of 71 OK; the 2 BAD lines are my own wrong expectations, explained in the table).
+
+| # | Probe | Result | Evidence |
+| --- | --- | --- | --- |
+| a1 | Only the anon `apikey` header, no `Authorization`: every RPC in the Database API (`create_game`, `join_game`, `peek_game`, `set_ready`, `update_square`, `set_free_center`, `start_game`, `complete_square`, `increment_square`, `undo_completion`, `end_game`, `leave_game`, `remove_player`, `register_media`, `auto_end_due_games`, `play_again`, `is_game_member`, `is_game_host`, `can_upload_game_media`, `safe_uuid`) | **pass** | each one: `401 42501 permission denied for function <name>`, a privilege error and never a game error. `set_updated_at` returns `404 PGRST202` (a trigger function, not RPC-callable) |
+| a2 | Anon-only `peek_game_public` | **pass** | `200 {"name":"Probe P10","status":"lobby","player_count":3,"free_center":true}` |
+| a3 | Anon-only `select` on `games`, `players`, `squares`, `media`, `square_increments` | **pass** | each one: `401 42501 permission denied for table …` |
+| a4 | `Authorization: Bearer <anon key>` (what supabase-js sends with no session) on `peek_game` | **pass** | 401 `42501` |
+| a5 | `pg_proc` privileges (psql, `bingo_local`) | **pass** (shim note) | Of the app functions, anon may execute only `peek_game_public`. pgcrypto functions in `public` are anon-executable, but only because the local shim installs pgcrypto there; PostgREST still answered `PGRST202` for them |
+| b1 | `peek_game_public` keys | **pass** | exactly `name,status,player_count,free_center`: no squares, players or codes |
+| b2 | Malformed codes: `""`, `ABC`, `ZZZZZZZZ`, `abcd-efgh-x`, `IIIIOOOO`, `%00`, `../../etc`, 300×`A`, SQL-ish, `null` | **pass** | `400 game_not_found` for each |
+| b3 | Lower-case dashed code | **pass** | resolves to the same game |
+| b4 | Expired game (`expires_at` set in the past with psql) | **pass** | `400 game_not_found`. Note: the authenticated `peek_game` still answers `ended` for it (pre-existing behaviour) |
+| c1 | `play_again` as a non-member / on an unknown id | **pass** | `game_not_found` / `game_not_found`. A malformed uuid gives `22P02` (PostgREST cast) |
+| c2 | `play_again` on an active game and on a lobby game | **pass** | `game_not_ended` |
+| c3 | Two different members in turn | **pass** | the same new id; the host is the first caller (B), not the old host |
+| c4 | New board compared with the old one | **pass** | 25 squares; labels, details and target_count identical by position (center `FREE` → `''`); every `current_count = 0`; no completions; no media |
+| c5 | Old member reads `next_join_code` / `next_game_id` on the old row; an outsider sees no pointer | **pass** | the values match the new game / `[]` |
+| c6 | Old member not yet joined: `games` by id and by join_code, `players`, `squares`, `media` of the new game | **pass** | all `[]` |
+| c7 | After `join_game(next_join_code)` | **pass** | joined under the old name, colour 1; the new game is now readable |
+| c8 | 10 members race `play_again` (10 parallel REST calls through the PostgREST pool), plus 5 more rounds | **pass** | 10×200, 1 distinct id, exactly 1 new row, rematch has 1 player; 0 bad rounds |
+| d1 | Old member, not in the new game, via a PostgREST FK embed (`select=id,next:next_game_id(...,players(display_name))`) | **pass** | `next: null` for the non-member; a member of both gets the row, so RLS applies to embeds (`v10-embed.mjs`) |
+| d2 | Old member: `is_game_member(new)`, `can_upload_game_media(new)`, `set_ready(new)`, `play_again(new)` | **pass** | `false`, `false`, `game_not_found`, `game_not_found` |
+| d3 | Realtime and Storage, reasoned from policies | **pass by reasoning** | Realtime `postgres_changes` delivery is RLS-checked per subscriber (`is_game_member`), so a non-member gets no INSERT/UPDATE events for the new game even with `id=eq.<new>`. The old row's UPDATE (with the pointer) goes only to old members. Storage SELECT/INSERT policies key on the first path segment (`is_game_member` / `can_upload_game_media`), both false for the new game. Caveat (hosted, pre-existing): Supabase does not RLS-check DELETE events, which carry only primary keys under RLS |
+| d4 | `peek_game(next_join_code)` as an old member | info | returns name/status/count, the same as the join screen; intended |
+| e1 | Cron (psql, `bingo_test`, rolled back): delete an expired old game (as `service_role`) whose `next_game_id` points at a live game | **pass** | the old row is deleted; the rematch is untouched (still a lobby with 1 player) |
+| e2 | The rematch is deleted first | **pass** | the old row's `next_game_id` becomes NULL via `on delete set null`; `next_join_code` stays stale, and the client then shows "Play again" again (`!nextCode \|\| !nextGameId`) |
+| e3 | Chain A→B→C, all expired, one `delete … where expires_at < now()` | **pass** | all 3 deleted, no FK error |
+| e4 | `games_next_game_not_self` | **pass** | a self-pointer is rejected |
+| u1 | UX: a phone joins with its name, without typing | **pass** | the host tapped "A new game is ready · Join": lobby in 312–368 ms, players `["Friendo V","Hosty V"]`, no name field |
+| u2 | UX: the old recap flips after someone else's Play again | **pass** | flipped to "A new game is ready · Join" 1.4–1.8 s after the friend's tap (1.5 s poll). Back on the old recap: joiner "Go to the new game", starter "You started a new game · Go to it" |
+| u3 | UX: a third phone that was never in the old game | **pass** | `/game/<old>` and `/game/<new>` both show "We couldn't find that game"; `play_again(old)` and `play_again(new)` give `game_not_found`; the pointer is not readable; the code appears nowhere. Joining through `/g/<newCode>` works, and the old pointer stays hidden afterwards |
+
+### 10.4 Open Graph and icon review
+
+**Metadata.** Requests with no cookies, at :3100 (production) and :3000 (dev). With the crawler user agents `facebookexternalhit/1.1`, `Twitterbot/1.0`, the iMessage UA (`… facebookexternalhit/1.1 Facebot Twitterbot/1.0`), Slackbot and `WhatsApp/2.23` (Signal uses this UA), every tag is in `<head>`:
+- `<title>` and `og:title` = `Join Friday Pub Crawl · Bingo Night`;
+- `og:description` = `2 players in. Tap to join the board — no signup.`;
+- `og:image` = `twitter:image` = `http://localhost:3000/g/<code>/opengraph-image?26eae99ccb932628`, absolute under `NEXT_PUBLIC_APP_URL`, with `og:image:width/height` 1200/630 and alt `Bingo Night board`;
+- `og:url` uses the normalised code;
+- `twitter:card` = `summary_large_image`.
+
+Edge cases:
+- **Ended game:** `<Name> · Bingo Night` / "This game has ended."
+- **Bogus code:** `Join the game · Bingo Night` (200).
+- **Lower-case dashed code:** resolves (but `og:image` keeps the raw `/g/sk5n-h2cq/…` path).
+- **No leaks:** the host name, player name and square label appear in neither the HTML nor the PNG bytes.
+- **Discord, Telegram, LinkedIn, Google:** also get the tags in `<head>`.
+- **Other user agents:** an unknown UA (curl, desktop Chrome) gets them streamed after `</head>`. That is Next's `htmlLimitedBots` default, fine for the major apps.
+
+**Card image.** 200 `image/png`, 1200×630, about 112–128 KB, `Cache-Control: public, max-age=300, s-maxage=3600, stale-while-revalidate=86400` (P14).
+
+Timings (local, including the `peek_game_public` round trip):
+
+| | First request after server start (fonts read) | Warm |
+| --- | --- | --- |
+| Production | 341 ms | 74–117 ms |
+| Dev | 1283 ms (compile) | 105–193 ms |
+| Page HTML (production) | 159 ms | 35–90 ms |
+
+**Odd paths.** I looked at every card.
+- `/g/%00`, 300-char code, `<script>`, `ZZZZ%20ZZZZ`, `abcd-efgh`, emoji: generic card, 200.
+- `/g/..` and `/g/%2e%2e`: normalise to `/` or 404, not 500.
+- Malformed percent-encoding: 500 in production (P18).
+
+**My judgement of the card:** good.
+- The name is large and legible in Permanent Marker. Long names clamp to two lines with "…" (except pathological widths, P17).
+- The logo and "Bingo Night" are small but clear. The board is a hand-drawn whiteboard with generic sample labels ("Group selfie", "High five", "Find a dog"…) and two red cross-offs; the FREE label disappears when free space is off.
+- No gradients, glow or emoji; white background, ink and one red.
+- Data shown: name, count and code only.
+- Minor taste point: the two red X's sit over sample labels ("Ka…ke", "Sin…ong") and half-hide them.
+
+**Icons.** Rendered at real size by Chromium at DPR 1 and 2 (`v10-icons/icons-dpr1.png`, `tabs-dpr1-x3.png`, which is a nearest-neighbour ×3 of the DPR-1 screenshot).
+- `favicon-16.png` (pixel-hinted): crisp, reads as a grid with a red slash in both light and dark tab strips.
+- `logo.svg` at 16 px, which Chrome may pick over the `.ico` since both are linked: slightly soft but still legible.
+- `favicon-32.png` / SVG at 32: clear.
+- `icon-192`: the art fills the rounded square.
+- `icon-maskable-512`: the grid sits well inside the 80 % safe-zone circle, and stays intact even under a 40 %-radius circle mask. Pass.
+- `favicon.ico`: header reserved 0, type 1, count 2; entries 16×16 and 32×32, 32 bpp, PNG-encoded, both decode.
+- `/manifest.webmanifest`: 200 `application/manifest+json`. `icon-192.png` (192×192), `icon-512.png` (512×512) and `icon-maskable-512.png` (512×512, `purpose: maskable`) are all 200 `image/png` at the declared sizes. `apple-touch-icon.png` is 180×180; `favicon-16`/`-32` are 16/32.
+- Small note: `public/sw-policy.js` `CACHE_VERSION` is still `v1` while icons and the layout changed. Harmless before the first deploy (icons are stale-while-revalidate).
+
+**CSP.** There is none. The production `/` response carries no `Content-Security-Policy`, `X-Frame-Options`, `Referrer-Policy` or `Permissions-Policy`. So nothing restricts `connect-src` to the PostHog host, and nothing blocks it either.
+
+### 10.5 Analytics privacy
+
+**Init options** (`posthogOptions()`, frozen by a unit test):
+- `persistence: "memory"`, `autocapture: false`, `capture_pageview: false`, `capture_pageleave: false`;
+- `disable_session_recording: true`, surveys / tours / conversations / web experiments off;
+- `advanced_disable_flags: true`, `disable_external_dependency_loading: true`;
+- `save_referrer: false`, `save_campaign_params: false`, `mask_personal_data_properties: true`;
+- `person_profiles: "identified_only"`, `respect_dnt: true`;
+- an allow-list `sanitize_properties` and a `before_send` that drops unknown events and `$set` / `$set_once`.
+
+`identify` is never called (grep). The app also does its own DNT/GPC check; that is unit-tested only, I did not run it in a browser.
+
+**Captured payloads.** Two phones, decoded from `v10-ux-key/payloads.json` plus the spec's run:
+- 4 requests, all `POST /__ph/e/` with no query string;
+- no `/flags`, `/decide`, `/s/` or config GETs;
+- top-level keys only `uuid, event, properties, timestamp`.
+
+| Event (sent from) | Own props actually sent | SDK props present | Verdict |
+| --- | --- | --- | --- |
+| `game_created` (`CreateGameForm`) | `pack:"night-out"`, `free_center:true` | `$os, $browser, $device_type, $screen_*, $viewport_*, $lib, $lib_version, $insert_id, $time, distinct_id, token, $is_identified:false, $process_person_profile:false` | **pass** |
+| `player_joined` (`JoinScreen`) | `late_join:false` | same | **pass**. Not sent for rematch joins (P16) |
+| `game_started` (`Lobby`, host only) | `player_count:2`, `counter_squares:1` | same | **pass** |
+| `square_completed` (`useBoardState`, applied only) | `counter:false`, `total_completed:2` | same | **pass** |
+| `media_uploaded` (`useUploadedMedia`) | `kind` (enum) | not exercised (Storage is a 501 stub); code read only | **pass (by reading)** |
+| `game_ended` (`BoardScreen`, host only) | `squares_completed, lines, blackout, duration_min, player_count, by:"host"` | same | **pass**. `by:"auto"` never sent (P16) |
+| `recap_viewed` (`RecapViewedTracker`) | `media_count:0` | same | **pass**. The game id is only an in-memory dedupe key and is never sent |
+| `play_again` (`RecapSummary`) | `source:"recap"` | same | **pass** |
+
+- **Absent from every payload:** `$current_url`, `$pathname`, `$host`, `$referrer`, `$referring_domain`, `$initial_*`, `title`, `$session_id`, `$window_id`, `$set`, `$set_once`, and any name, code, game id, user id or square text. Both the spec's string scan and mine came up empty.
+- **What remains:**
+  - `distinct_id`: a fresh UUIDv7 per page load, which links one phone's events within a page load and encodes its start time;
+  - device class only: OS, browser, device type, screen and viewport size;
+  - request headers: `User-Agent` and the client IP reach PostHog;
+  - with a same-origin host, the auth cookie too (P12).
+- **No key** (production build): `posthog-js` lives in its own 323 KB chunk (`42czaq68gvcn3.js`). That chunk is referenced only from the analytics module's dynamic `import()`, never from the HTML of `/`, `/new` or `/g/<code>` (0 references; 8 initial scripts checked).
+- **No key** (dev UX run): requests went only to `127.0.0.1:3000` and `127.0.0.1:54321`. No PostHog host was contacted.
+- **Service worker:** PostHog's cross-origin host returns `null` from `selectStrategy` (`url.origin !== config.origin`). A same-origin proxy is never cached either: events are POSTs, and unknown same-origin GET paths fall through to `null`.
+
+### 10.6 Logo review
+
+**Brief:** "simplified 3×3 bingo grid drawn in thick marker strokes with one diagonal line scribbled through it in a bold accent color; must read clearly at 32 px; no gradients, no glow, no generic AI-style icon".
+
+**Verdict: mostly meets it.**
+- **Grid:** a 3×3 grid in 44/512 ink strokes with slight hand wobble (quadratic paths), on a cream rounded square.
+- **Accent:** one red (`#c8302a`) diagonal.
+- **Effects:** no gradient or glow.
+- **Feel:** it does not look like a generic AI icon.
+- **At 32 px:** grid and line read clearly (`v10-icons/icons-dpr1.png`). The hand-hinted 16 px version is crisp.
+
+**Where it falls short:**
+- The red line is not really "scribbled". Its second, thinner pass lies almost on top of the first, so at every size it reads as one clean bar.
+- The bar runs corner to corner across the frame, so the mark can read as a strike-through, "cancelled grid" sign rather than a winning line.
+
+**What I would change:**
+- start and end the line inside the corner cells, through the three diagonal cell centres;
+- offset the second pass visibly (about 12–16 units, slightly different angle) so it looks like a quick double marker stroke;
+- optionally use round dot ends.
+
+### 10.7 Only verifiable on a hosted project
+
+- **Realtime:**
+  - RLS-filtered delivery of the old game's UPDATE (`next_game_id` / `next_join_code`) to old members only;
+  - no events for non-members of the rematch;
+  - the recap flip time without the 1.5 s e2e poll (production poll is 15 s, so it depends on Realtime).
+- **Supabase DELETE events** are not RLS-checked (primary keys only); confirm that this is acceptable.
+- **PostgREST/Kong anon rate limiting on `peek_game_public`.** Codes have 40 bits; with no rate limit, enumeration is still impractical, but nothing throttles it.
+- **Vercel CDN** behaviour of the card's `s-maxage` / SWR (P14).
+- **Real unfurls:** iMessage, WhatsApp, Signal, Slack, Discord and X fetching the public `NEXT_PUBLIC_APP_URL`, including preview deployments, where `og:image` points at whatever `NEXT_PUBLIC_APP_URL` says.
+- **PostHog project settings:**
+  - "Discard client IP data" and GeoIP enrichment (the IP and User-Agent reach PostHog regardless of the client allow-list);
+  - data region (us/eu);
+  - the bot filter (headless and crawler traffic is dropped, which the spec works around by spoofing a phone UA).
+- **Production behaviour with a key built in** (I only ran the keyed build in dev).
+- **Postgres 17 / hosted `postgres` role** for the new migration (it uses only core functions and `on delete set null`; nothing found that hosted would reject).
+
+### 10.8 Verdict
+
+- **10a:** the security model is sound. `peek_game_public` is the only anon-executable function and returns only the four preview fields. `play_again` is member-only, ended-only, idempotent and race-safe (10-way REST races, six rounds). The rematch stays invisible to old members until they join with the code, and the cron's FK behaviour is correct.
+- **10b:** the cards and icons are on-brand, legible, fast (about 80–120 ms warm in production) and leak nothing.
+- **10c:** analytics sends only the allow-listed counts and enums, with no personal data, and stays unloaded without a key.
+
+Nothing blocks a deploy. Before or right after deploying:
+- move the rematch link below "Back to home" (P11);
+- do not point PostHog at a same-origin proxy, or strip cookies if you do (P12);
+- harden `metadataBase` against an empty or invalid `NEXT_PUBLIC_APP_URL` (P15);
+- shorten the card's CDN cache (P14).
+
+The rest are nits.

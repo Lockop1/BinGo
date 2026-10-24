@@ -227,7 +227,7 @@ export default async function Image({ params }: { params: Promise<{ code: string
     {
       ...size,
       fonts,
-      headers: { "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400" },
+      headers: { "Cache-Control": "public, max-age=120, s-maxage=300, stale-while-revalidate=3600" },
     },
   );
 }
