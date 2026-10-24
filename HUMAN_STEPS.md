@@ -33,6 +33,10 @@ npx supabase link --project-ref <ref>
 npx supabase db push          # applies supabase/migrations/* in order
 ```
 
+Deploy order matters: the app and the schema must move together (`npx supabase db push`,
+then deploy the matching app build). An old app build against a newer schema would send
+`increment_square` arguments the database no longer accepts until players reload.
+
 Then verify in the dashboard: **Database → Replication** shows the
 `supabase_realtime` publication including `games`, `players`, `squares`,
 `media`; **Storage** shows a private bucket `game-media`.
