@@ -1,17 +1,31 @@
 import type { Media, Player, Square } from "@/lib/game/types";
 
+/**
+ * Where the square stands now: `completed` by a player, the `free` center (completed by
+ * nobody), or `open`: not crossed off, e.g. it was undone after the photo was added. Media
+ * stays in the album either way; only the caption changes.
+ */
+export type RecapSquareState = "completed" | "free" | "open";
+
 export type RecapItem = {
   media: Media;
   square: Square;
-  /** Who completed the square (null for the free center). */
+  state: RecapSquareState;
+  /** Who completed the square (null for the free center, an open square or an unknown player). */
   completer: Player | null;
   /** Who added this photo/video (may differ from the completer). */
   uploader: Player | null;
 };
 
+export function recapSquareState(square: Pick<Square, "completed_at" | "completed_by_player_id">): RecapSquareState {
+  if (square.completed_at === null) return "open";
+  return square.completed_by_player_id === null ? "free" : "completed";
+}
+
 /**
  * Story order: board order (position asc), then upload time within a square.
  * Media whose square is unknown is skipped; squares without media never appear.
+ * Media on a square that is no longer crossed off (undone) is kept, as `state: "open"`.
  */
 export function buildRecapItems(media: readonly Media[], squares: readonly Square[], players: readonly Player[]): RecapItem[] {
   const squareById = new Map(squares.map((s) => [s.id, s]));
@@ -21,7 +35,13 @@ export function buildRecapItems(media: readonly Media[], squares: readonly Squar
     const square = squareById.get(m.square_id);
     if (!square) continue;
     const completer = square.completed_by_player_id ? playerById.get(square.completed_by_player_id) : undefined;
-    items.push({ media: m, square, completer: completer ?? null, uploader: playerById.get(m.player_id) ?? null });
+    items.push({
+      media: m,
+      square,
+      state: recapSquareState(square),
+      completer: completer ?? null,
+      uploader: playerById.get(m.player_id) ?? null,
+    });
   }
   return items.sort(
     (a, b) =>
@@ -29,6 +49,19 @@ export function buildRecapItems(media: readonly Media[], squares: readonly Squar
       a.media.created_at.localeCompare(b.media.created_at) ||
       a.media.id.localeCompare(b.media.id),
   );
+}
+
+/**
+ * The summary's numbers: squares crossed off now (board order) and how many each player
+ * completed. An undone square counts for nobody, even if it still has photos in the album.
+ */
+export function recapTotals(squares: readonly Square[]): { completed: Square[]; byPlayer: Map<string, number> } {
+  const completed = squares.filter((s) => s.completed_at !== null).sort((a, b) => a.position - b.position);
+  const byPlayer = new Map<string, number>();
+  for (const s of completed) {
+    if (s.completed_by_player_id) byPlayer.set(s.completed_by_player_id, (byPlayer.get(s.completed_by_player_id) ?? 0) + 1);
+  }
+  return { completed, byPlayer };
 }
 
 /** Square text for display: the free center may be blank. */

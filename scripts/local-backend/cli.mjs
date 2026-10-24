@@ -13,7 +13,8 @@ const USAGE = `Usage: node scripts/local-backend/cli.mjs <command>
   start           run PostgREST, Auth and the gateway in the foreground (Ctrl+C stops)
   start --detach  same, in the background (PIDs and logs in .run/)
   stop            stop a detached backend
-  status          show process and database status (exit 3 if not all up)
+  status          show process and database status (exit 3 if not all up,
+                  exit 4 if an applied migration file changed since it was applied)
   env             print the .env.local lines
   smoke           end-to-end check with supabase-js against the running backend
 `;
@@ -49,7 +50,10 @@ async function main() {
     }
     case "status": {
       const { status } = await import("./processes.mjs");
-      if (!(await status())) process.exitCode = 3;
+      const { allUp, drifted } = await status();
+      // Drift wins: a green run against a stale schema is worse than a red one.
+      if (drifted > 0) process.exitCode = 4;
+      else if (!allUp) process.exitCode = 3;
       break;
     }
     case "env":

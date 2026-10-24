@@ -44,15 +44,37 @@ to use a different secret; the keys change with it.
 | `download` | Fetches PostgREST 13.0.7 and Supabase Auth 2.185.0 (binary + its SQL migrations) into `.bin/` if missing. `LOCAL_BACKEND_BIN_DIR` overrides the directory. |
 | `reset` | Drops and recreates `bingo_local`, creates the `auth` schema, runs Auth's own migrations (`auth migrate`), applies `supabase/tests/local_shim.sql`, then `migrate`. Auth runs first so the real `auth.users` exists and the shim's stub is skipped. |
 | `migrate` | Applies pending `supabase/migrations/*.sql` in filename order with `psql -v ON_ERROR_STOP=1`, one transaction per file. Applied files are tracked in `_local_backend.migrations` and skipped on re-run; a warning is printed if an applied file was edited. An empty file (a fresh `supabase migration new`) is not recorded and stops the run, so files are never applied out of order. Sends `NOTIFY pgrst, 'reload schema'` so a running PostgREST sees new tables and functions. `LOCAL_BACKEND_MIGRATIONS_DIR` overrides the directory (for experiments). |
-| `start` | Runs PostgREST (127.0.0.1:54323), Auth (127.0.0.1:54324) and the gateway (127.0.0.1:54321) in the foreground; Ctrl+C stops all three. |
+| `start` | Runs PostgREST (127.0.0.1:54323), Auth (127.0.0.1:54324) and the gateway (127.0.0.1:54321) in the foreground; Ctrl+C stops all three. Prints a `DRIFT:` line for each drifted migration (see below) but starts anyway. |
 | `start --detach` | Same, in the background. PIDs and logs go to `.run/`. |
 | `stop` | Stops a detached backend (SIGTERM, then SIGKILL after 5s). |
-| `status` | Health of each process and how many app migrations are applied. Exit code 3 if anything is down. |
+| `status` | Health of each process, how many app migrations are applied, and a `DRIFT:` line for each drifted migration. Exit code 4 if any migration drifted, else 3 if anything is down (or `bingo_local` is missing), else 0. |
 | `env` | Prints the `.env.local` lines. |
 | `smoke` | End-to-end check with supabase-js (see below). Exit code 1 on failure. |
 
 You can `reset` or `migrate` while the backend is running; PostgREST reconnects
 and reloads its schema cache.
+
+## Migration drift
+
+`migrate` records each applied file's sha256 in `_local_backend.migrations`.
+`status` and `start` re-hash every applied file and compare. If a file was
+edited (or deleted) after it was applied, `bingo_local` no longer matches the
+committed migrations, and they print:
+
+```
+DRIFT: supabase/migrations/<file>.sql changed after it was applied — run: npm run backend:reset
+```
+
+`status` then exits with code 4; `start` only warns. The fix is always
+`npm run backend:reset` (and, in the repo, never editing an applied migration:
+add a new one instead).
+
+`npm run e2e` runs `e2e/global-setup.ts` (Playwright `globalSetup`) first: it runs
+`node scripts/local-backend/cli.mjs status` and aborts the whole run with that
+output if the backend is down (exit 3) or drifted (exit 4). It never starts or
+resets the backend itself. `E2E_PORT` / `E2E_BASE_URL` still choose the app
+server as before; set `E2E_SKIP_BACKEND_CHECK=1` to skip the check when
+`.env.local` points somewhere other than this harness.
 
 ## Gateway routes (port 54321)
 

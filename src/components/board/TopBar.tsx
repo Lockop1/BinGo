@@ -1,7 +1,9 @@
 "use client";
 
 import { Images, Settings } from "lucide-react";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Toasts } from "@/components/board/Toasts";
+import type { Toast } from "@/lib/game/toasts";
 import type { Player } from "@/lib/game/types";
 import type { SyncState } from "@/lib/game/useGame";
 import { playerColor, type PaletteTheme } from "@/lib/palette";
@@ -67,7 +69,8 @@ const assumeOnline = () => true;
 
 /**
  * The only thing above the grid: game name, a quiet sync mark (see SyncMark),
- * players, settings, album (with a small count once there is media).
+ * players, settings, album (with a small count once there is media). A toast
+ * takes the game name's place while it shows (see Toasts); nothing else moves.
  *
  * No layout shift for the frequent case: the soft syncing dot lives in a
  * fixed slot that is always reserved at the end of the title (it only fades
@@ -85,6 +88,8 @@ export function TopBar({
   onSettings,
   onAlbum,
   onRetry,
+  toast = null,
+  onToast,
 }: {
   name: string;
   players: Player[];
@@ -97,17 +102,30 @@ export function TopBar({
   onSettings: () => void;
   onAlbum: () => void;
   onRetry: () => void;
+  /** The toast showing now (it covers the title), if any. */
+  toast?: Toast | null;
+  onToast?: (toast: Toast) => void;
 }) {
   const dots = players.slice(0, 4);
+  const names = useMemo(() => players.map((p) => p.display_name), [players]);
   const online = useSyncExternalStore(subscribeOnline, isOnline, assumeOnline);
   const syncingLong = useHeldFor(syncState === "syncing", SYNCING_MARK_DELAY_MS);
   const mark = syncMarkFor({ syncState, online, pendingCount, syncingLong });
   const offline = mark === "offline";
   return (
     <header className="flex min-w-0 shrink-0 items-center gap-0.5 pb-0.5 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.25rem,env(safe-area-inset-right))] pt-[max(0.25rem,env(safe-area-inset-top))]">
-      <h1 className="min-w-0 flex-1 truncate font-board text-xl leading-tight" data-testid="board-title">
-        {name}
-      </h1>
+      {/* Centre slot: the title, or the current toast over it (same box, so no layout shift). */}
+      <div className="relative flex min-w-0 flex-1 items-center self-stretch">
+        <h1
+          className={`min-w-0 flex-1 truncate font-board text-xl leading-tight transition-opacity duration-200 motion-reduce:transition-none ${
+            toast ? "opacity-0" : "opacity-100"
+          }`}
+          data-testid="board-title"
+        >
+          {name}
+        </h1>
+        <Toasts toast={toast} theme={theme} names={names} onTap={(t) => onToast?.(t)} />
+      </div>
 
       {/* Always in the layout; only its opacity changes. Decorative: a slow sync needs no announcement. */}
       <span

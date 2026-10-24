@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Media, Player, Square } from "@/lib/game/types";
 import { completedLines } from "@/components/recap/lines";
-import { buildRecapItems, recapFileNames, slug } from "@/components/recap/recapItems";
+import { buildRecapItems, recapFileNames, recapTotals, slug } from "@/components/recap/recapItems";
 
 const at = "2026-10-01T20:00:00.000Z";
 const square = (position: number, done: boolean, by: string | null = null): Square => ({
@@ -65,6 +65,33 @@ describe("buildRecapItems", () => {
       "08-label-7-jake-2.jpg",
       "19-label-18-jake.jpg",
     ]);
+  });
+
+  it("keeps media on a square that was undone later, crediting the uploader", () => {
+    // s5 was completed by Jake, Ana added a photo, then it was undone (completed_by / completed_at null).
+    const undone = square(5, false, null);
+    const free = { ...square(12, true, null), label: "" };
+    const all = [...squares, undone, free];
+    const items = buildRecapItems(
+      [
+        media("m6", "s5", "p2", "2026-10-01T21:00:00Z"),
+        media("m7", "s7", "p1", "2026-10-01T21:05:00Z"),
+        media("m8", "s12", "p1", "2026-10-01T21:10:00Z"),
+      ],
+      all,
+      players,
+    );
+    expect(items.map((i) => [i.media.id, i.state, i.completer?.display_name ?? null, i.uploader?.display_name ?? null])).toEqual([
+      ["m6", "open", null, "Ana Lí"],
+      ["m7", "completed", "Jake", "Jake"],
+      ["m8", "free", null, "Jake"],
+    ]);
+    expect(recapFileNames(items)).toEqual(["06-label-5-ana-li.jpg", "08-label-7-jake.jpg", "13-free-space-jake.jpg"]);
+
+    // The summary counts only what is crossed off now; the undone square counts for nobody.
+    const { completed, byPlayer } = recapTotals(all);
+    expect(completed.map((s) => s.position)).toEqual([2, 7, 12, 18]);
+    expect(Object.fromEntries(byPlayer)).toEqual({ p1: 2, p2: 1 });
   });
 
   it("slugs safely", () => {

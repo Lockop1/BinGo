@@ -193,8 +193,15 @@ body {
   -webkit-line-clamp: 3;
   line-clamp: 3;
   overflow: hidden;
-  overflow-wrap: anywhere;
+  /* Hyphenate first (needs lang="en" on <html>); a word is only cut without a hyphen when it
+     cannot fit even then (`anywhere` let Chrome cut "Complime / nt" before trying a hyphen). */
   hyphens: auto;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.square-label[data-lines="2"] {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 .square-label[data-size="lg"] {
   font-size: 15px;
@@ -207,6 +214,23 @@ body {
 .square-label[data-size="sm"] {
   font-size: 11px;
   line-height: 12.5px;
+}
+
+/* Lobby cells measure themselves: on a narrow phone (cells under ~60 px, i.e. 320–360 px
+   screens) labels with a long word drop a step so the word fits whole or hyphenates. */
+.lobby-cell {
+  container-type: inline-size;
+}
+@container (max-width: 60px) {
+  .square-label[data-long-word][data-size="lg"] {
+    font-size: 12.5px;
+    line-height: 14px;
+  }
+  .square-label[data-long-word][data-size="md"],
+  .square-label[data-long-word][data-size="sm"] {
+    font-size: 10.5px;
+    line-height: 12px;
+  }
 }
 
 /* Pencil check: stroke drawn in on appearance (instant with reduced motion). */

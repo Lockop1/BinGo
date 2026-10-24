@@ -7,7 +7,6 @@ import { Celebration } from "@/components/board/Celebration";
 import { PlayersSheetBody } from "@/components/board/PlayersSheet";
 import { SettingsSheetBody } from "@/components/board/SettingsSheet";
 import { SquareSheetBody, squareTitle } from "@/components/board/SquareSheet";
-import { Toasts } from "@/components/board/Toasts";
 import { TopBar } from "@/components/board/TopBar";
 import { RecapStory } from "@/components/recap/RecapStory";
 import { buildRecapItems, recapFileNames, type RecapItem } from "@/components/recap/recapItems";
@@ -298,6 +297,8 @@ export function BoardScreen({
           boardState.retry();
           void refresh();
         }}
+        toast={toast}
+        onToast={onToast}
       />
 
       <div className="flex min-w-0 flex-1 flex-col items-center pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.375rem,env(safe-area-inset-left))] pr-[max(0.375rem,env(safe-area-inset-right))] pt-2">
@@ -320,7 +321,6 @@ export function BoardScreen({
         </section>
       </div>
 
-      <Toasts toast={toast} theme={paletteTheme} onTap={onToast} />
       <Celebration
         celebration={current}
         theme={paletteTheme}

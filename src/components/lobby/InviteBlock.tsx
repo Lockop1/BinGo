@@ -18,7 +18,8 @@ export function InviteBlock({ code, gameName }: { code: string; gameName: string
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
   const invite = async () => {
-    const outcome = await shareOrCopy({ title: gameName, text: "Join our bingo night", url });
+    // The invite copies the bare link (the code above is what people read out).
+    const outcome = await shareOrCopy({ title: gameName, text: "Join our bingo night", url }, { copy: "url" });
     if (outcome === "shared" || outcome === "dismissed") return;
     setFeedback(outcome === "copied" ? "copied" : "failed");
     window.clearTimeout(timer.current);

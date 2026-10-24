@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_QUEUED, TOAST_MS, createToastQueue, mediaToasts } from "@/lib/game/toasts";
+import { MAX_QUEUED, TOAST_MS, createToastQueue, mediaToasts, splitLead } from "@/lib/game/toasts";
 import { manualClock } from "@/lib/game/testFixtures";
 
 function setup() {
@@ -111,5 +111,19 @@ describe("mediaToasts", () => {
     expect(mediaToasts(new Set(), [row("m9", "ghost", "sq-x")], ctx)).toEqual([
       { text: "Someone added a photo", color: null, position: null },
     ]);
+  });
+});
+
+describe("splitLead", () => {
+  it("splits off the player name the toast starts with (longest match wins)", () => {
+    expect(splitLead("Jake got Skyline Chili", ["Ana", "Jake"])).toEqual({ lead: "Jake", rest: " got Skyline Chili" });
+    expect(splitLead("Jake B undid Pool", ["Jake", "Jake B"])).toEqual({ lead: "Jake B", rest: " undid Pool" });
+  });
+
+  it("needs a whole name followed by a space", () => {
+    expect(splitLead("Jakeline got Pool", ["Jake"])).toBeNull();
+    expect(splitLead("Jake", ["Jake"])).toBeNull();
+    expect(splitLead("Someone added a photo", ["Jake", ""])).toBeNull();
+    expect(splitLead("Couldn't save Pool", [])).toBeNull();
   });
 });

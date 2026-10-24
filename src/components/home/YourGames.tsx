@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ChevronRight, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useSession } from "@/components/providers/SessionProvider";
 import { SkeletonLines } from "@/components/ui/Skeleton";
 import { PencilButton } from "@/components/ui/PencilButton";
 import { errorCopy } from "@/lib/game/errors";
@@ -14,17 +15,26 @@ type Row = { game: Game; playerCount: number };
 
 type State = { status: "loading" } | { status: "ready"; rows: Row[] } | { status: "error"; message: string };
 
-async function loadGames(): Promise<Row[]> {
+async function loadGames(userId: string | null): Promise<Row[]> {
+  if (!userId) return [];
   const supabase = createClient();
-  // RLS limits this to games this phone's anonymous user is a player in.
-  const { data: games, error } = await supabase
+  // Only games this phone's anonymous user is a player in: filtered explicitly through
+  // players.user_id (inner join), not left to RLS alone (RLS still applies on top).
+  const { data: rows, error } = await supabase
     .from("games")
-    .select("*")
+    .select("*, players!inner(user_id)")
+    .eq("players.user_id", userId)
     .gt("expires_at", new Date().toISOString())
     .order("created_at", { ascending: false })
     .limit(50);
   if (error) throw error;
-  if (games.length === 0) return [];
+  if (rows.length === 0) return [];
+  // Drop the embedded membership row so each entry is a plain `games` row again.
+  const games: Game[] = rows.map((row) => {
+    const game: Game & { players?: unknown } = { ...row };
+    delete game.players;
+    return game;
+  });
 
   const { data: players, error: playersError } = await supabase
     .from("players")
@@ -41,19 +51,20 @@ async function loadGames(): Promise<Row[]> {
 }
 
 /** Never rejects. */
-async function loadState(): Promise<State> {
+async function loadState(userId: string | null): Promise<State> {
   try {
-    return { status: "ready", rows: await loadGames() };
+    return { status: "ready", rows: await loadGames(userId) };
   } catch (error) {
     return { status: "error", message: errorCopy(error) };
   }
 }
 
-/** "Your games": games on this phone from the last 30 days. Render inside <SessionGate>. */
+/** "Your games": games on this phone from the last 30 days. Render inside <SessionGate> (needs the user id). */
 export function YourGames() {
+  const { userId } = useSession();
   const [state, setState] = useState<State>({ status: "loading" });
 
-  const load = useCallback(() => loadState().then(setState), []);
+  const load = useCallback(() => loadState(userId).then(setState), [userId]);
 
   useEffect(() => {
     void load();

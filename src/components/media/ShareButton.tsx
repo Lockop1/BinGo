@@ -27,7 +27,7 @@ export function shareMessage(square: ShareSquare, players: readonly Pick<Player,
 
 type Feedback = "copied" | "failed" | null;
 
-/** "Share to group chat": the phone's share sheet with the invite link, or copy it. */
+/** "Share to group chat": the phone's share sheet with the message and invite link, or copy both. */
 export function ShareButton({ game, square, players }: { game: ShareGame; square: ShareSquare; players: readonly Player[] }) {
   const [feedback, setFeedback] = useState<Feedback>(null);
   const timer = useRef<number | undefined>(undefined);

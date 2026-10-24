@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { PaperTitle } from "@/components/paper/PaperPage";
+import { useSession } from "@/components/providers/SessionProvider";
 import { PencilButton } from "@/components/ui/PencilButton";
 import { SkeletonLines } from "@/components/ui/Skeleton";
 import { TextField } from "@/components/ui/TextField";
@@ -24,18 +25,28 @@ type State =
   | { status: "ready"; preview: GamePreview }
   | { status: "error"; message: string };
 
-/** Members can already read the game row (RLS); everyone else gets null. */
-async function findMembership(code: string): Promise<string | null> {
-  const { data, error } = await createClient().from("games").select("id").eq("join_code", code).maybeSingle();
+/**
+ * The game id if this user is a player in the game with this code, else null. Filters on
+ * `players.user_id` explicitly (inner join), so a membership is never inferred from merely
+ * being able to read the game row; RLS still limits what is readable on top of this.
+ */
+async function findMembership(code: string, userId: string | null): Promise<string | null> {
+  if (!userId) return null;
+  const { data, error } = await createClient()
+    .from("games")
+    .select("id, players!inner(user_id)")
+    .eq("join_code", code)
+    .eq("players.user_id", userId)
+    .maybeSingle();
   if (error) return null;
   return data?.id ?? null;
 }
 
 /** Never rejects. */
-async function loadState(code: string): Promise<State> {
+async function loadState(code: string, userId: string | null): Promise<State> {
   if (code.length === 0) return { status: "not_found" };
   try {
-    const [preview, memberGameId] = await Promise.all([peekGame({ code }), findMembership(code)]);
+    const [preview, memberGameId] = await Promise.all([peekGame({ code }), findMembership(code, userId)]);
     return memberGameId ? { status: "member", gameId: memberGameId } : { status: "ready", preview };
   } catch (error) {
     const gameError = toGameError(error);
@@ -45,17 +56,39 @@ async function loadState(code: string): Promise<State> {
   }
 }
 
-/** /g/[code]: preview the game, pick a display name, join. Render inside <SessionGate>. */
+/** /g/[code]: preview the game, pick a display name, join. Render inside <SessionGate> (needs the user id). */
 export function JoinScreen({ rawCode }: { rawCode: string }) {
   const code = normalizeJoinCode(rawCode);
   const router = useRouter();
+  const { userId } = useSession();
   const [state, setState] = useState<State>({ status: "loading" });
 
-  const load = useCallback(() => loadState(code).then(setState), [code]);
+  const load = useCallback(() => loadState(code, userId).then(setState), [code, userId]);
 
+  // Next keeps this route mounted (hidden) after navigating away, and a back/forward cache
+  // restore keeps the whole page. Either way the screen must come back fresh: a re-check of
+  // membership and a new form (never the old one still showing "Joining…").
   useEffect(() => {
-    void load();
-  }, [load]);
+    let current = true;
+    void loadState(code, userId).then((next) => {
+      if (current) setState(next);
+    });
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      setState({ status: "loading" });
+      void loadState(code, userId).then((next) => {
+        if (current) setState(next);
+      });
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => {
+      current = false;
+      window.removeEventListener("pageshow", onPageShow);
+      // Runs when the route is hidden (or unmounted): showing it again starts from loading,
+      // which also remounts JoinForm with its busy state cleared.
+      setState({ status: "loading" });
+    };
+  }, [code, userId]);
 
   // Already a player in this game (e.g. the host opening their own link): go straight in.
   useEffect(() => {
@@ -123,7 +156,13 @@ function JoinForm({ code, preview }: { code: string; preview: GamePreview }) {
     try {
       const player = await joinGame({ code, display_name: displayName });
       saveDisplayName(displayName);
-      router.replace(`/game/${player.game_id}`);
+      // Clear busy in the same transition as the navigation, so the button never flashes back
+      // to "Join" here, and a restored copy of this screen is never stuck on "Joining…".
+      submitting.current = false;
+      startTransition(() => {
+        setBusy(false);
+        router.replace(`/game/${player.game_id}`);
+      });
     } catch (err) {
       submitting.current = false;
       setBusy(false);

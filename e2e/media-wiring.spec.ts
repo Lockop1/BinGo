@@ -44,7 +44,16 @@ async function expectAddAndShare(page: Page) {
 
 test("media wiring: sheet gating, empty album, recap on end", async ({ browser }) => {
   test.setTimeout(120_000);
-  const { host, friend, close } = await twoPhonesInActiveGame(browser, { prefix: "Media" });
+  const { host, friend, code, close } = await twoPhonesInActiveGame(browser, {
+    prefix: "Media",
+    // The friend can read the clipboard, and has no share sheet (so Share copies).
+    friend: { permissions: ["clipboard-read", "clipboard-write"] },
+    prepare: async (context) => {
+      await context.addInitScript(() => {
+        Object.defineProperty(Navigator.prototype, "share", { value: undefined, configurable: true });
+      });
+    },
+  });
 
   // --- An open square: the "complete it first" hint, no Add button, Share still offered.
   await openSquare(friend, 0);
@@ -66,6 +75,11 @@ test("media wiring: sheet gating, empty album, recap on end", async ({ browser }
   await openSquare(friend, 0);
   await expectAddAndShare(friend);
   await expectFitsWidth(friend, "with the completed square's sheet open");
+  // Without a share sheet, Share copies the message and the link, not just the link.
+  await friend.getByTestId("share-group").click();
+  await expect(friend.getByTestId("share-feedback")).toHaveText("Copied");
+  const copied = await friend.evaluate(() => navigator.clipboard.readText());
+  expect(copied).toMatch(new RegExp(`^Friendo just completed ${SQUARE_0}\n\\S+/g/${code}$`));
   await closeSheet(friend);
 
   // The host sees it completed and gets the same actions for square 0.

@@ -1,6 +1,7 @@
 "use client";
 
 import { Undo2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { BoardSwatch } from "@/components/board/BoardSwatch";
 import { MediaActions } from "@/components/media/MediaActions";
 import { SquareMediaStrip } from "@/components/media/SquareMediaStrip";
@@ -139,18 +140,65 @@ export function SquareSheetBody({
         </PencilButton>
       ) : null}
 
-      {canUndo ? (
-        <PencilButton variant="secondary" onClick={onUndo} className="self-start" data-testid="undo">
-          <Undo2 aria-hidden className="size-5" strokeWidth={2.25} />
-          Undo
-        </PencilButton>
-      ) : null}
+      {canUndo ? <UndoButton key={square.position} onUndo={onUndo} /> : null}
 
       <SquareMediaStrip media={media} onOpen={onOpenMedia} />
 
       <div className="border-t-2 border-dashed border-ink-faint pt-[14px]">
         <MediaActions game={game} square={square} me={me} players={players} pending={square.pending} />
       </div>
+    </div>
+  );
+}
+
+/** How long "Confirm undo" waits for the second tap before going back to "Undo". */
+export const UNDO_CONFIRM_MS = 4000;
+/** A second tap sooner than this after the first is a double-tap, not a confirmation. */
+const UNDO_DOUBLE_TAP_MS = 350;
+
+/**
+ * Undo in two deliberate taps ("Undo" → "Confirm undo"), so a stray tap never reopens
+ * someone's square (the host can undo anyone's). Goes back to "Undo" after UNDO_CONFIRM_MS.
+ */
+function UndoButton({ onUndo }: { onUndo: () => void }) {
+  const [armed, setArmed] = useState(false);
+  const armedAt = useRef(0);
+  const timer = useRef<number | undefined>(undefined);
+
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const onClick = () => {
+    window.clearTimeout(timer.current);
+    if (!armed) {
+      armedAt.current = Date.now();
+      setArmed(true);
+      timer.current = window.setTimeout(() => setArmed(false), UNDO_CONFIRM_MS);
+      return;
+    }
+    if (Date.now() - armedAt.current < UNDO_DOUBLE_TAP_MS) {
+      // Keep waiting for a real second tap.
+      timer.current = window.setTimeout(() => setArmed(false), UNDO_CONFIRM_MS);
+      return;
+    }
+    setArmed(false);
+    onUndo();
+  };
+
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+      <PencilButton
+        variant={armed ? "primary" : "secondary"}
+        onClick={onClick}
+        className="min-h-11 self-start"
+        data-testid={armed ? "undo-confirm" : "undo"}
+        data-armed={armed}
+      >
+        <Undo2 aria-hidden className="size-5" strokeWidth={2.25} />
+        {armed ? "Confirm undo" : "Undo"}
+      </PencilButton>
+      <span aria-live="polite" className="text-lg leading-7 text-ink-soft" data-testid="undo-hint">
+        {armed ? "Tap again to reopen it for everyone." : null}
+      </span>
     </div>
   );
 }

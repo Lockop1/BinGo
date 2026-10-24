@@ -1,11 +1,12 @@
 /**
  * Sharing helpers (browser only). The Web Share API opens the phone's share
- * sheet (group chats); where it is missing or fails, the link is copied.
+ * sheet (group chats); where it is missing or fails, the message and link are
+ * copied instead (or just the link, for the invite).
  */
 
 export type ShareData = { title: string; text: string; url: string };
 
-/** `shared`: share sheet completed. `copied`: link on the clipboard. `dismissed`: user closed the sheet. */
+/** `shared`: share sheet completed. `copied`: on the clipboard. `dismissed`: user closed the sheet. */
 export type ShareOutcome = "shared" | "copied" | "dismissed" | "failed";
 
 function canUseWebShare(data: ShareData): boolean {
@@ -45,8 +46,21 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-/** Share sheet when available, otherwise (or if it errors) copy the URL. */
-export async function shareOrCopy(data: ShareData): Promise<ShareOutcome> {
+/**
+ * What the copy fallback puts on the clipboard: by default the message, a newline and the link
+ * (so a paste into a group chat says the same as the share sheet would); `copy: "url"` for the
+ * bare link (the invite, where the link is the whole point).
+ */
+export function copyFallbackText(data: ShareData, copy: "message" | "url" = "message"): string {
+  const text = data.text.trim();
+  return copy === "url" || text === "" ? data.url : `${text}\n${data.url}`;
+}
+
+/** Share sheet when available, otherwise (or if it errors) copy the message and link (see copyFallbackText). */
+export async function shareOrCopy(
+  data: ShareData,
+  { copy = "message" }: { copy?: "message" | "url" } = {},
+): Promise<ShareOutcome> {
   if (canUseWebShare(data)) {
     try {
       await navigator.share(data);
@@ -56,5 +70,5 @@ export async function shareOrCopy(data: ShareData): Promise<ShareOutcome> {
       // NotAllowedError / DataError etc.: fall through to copying.
     }
   }
-  return (await copyText(data.url)) ? "copied" : "failed";
+  return (await copyText(copyFallbackText(data, copy))) ? "copied" : "failed";
 }

@@ -142,9 +142,20 @@ test("live board: cross-off, toasts, bingo once, undo, counters, offline, end ga
   await expect(host.getByTestId("celebration")).toHaveCount(0);
   await expect(host.getByTestId("game-screen")).toHaveAttribute("data-celebrations", "0");
 
-  // --- Undo: the host may undo the friend's square; the friend sees it reopen.
+  // --- Undo: the host may undo the friend's square (two taps); the friend sees it reopen.
   await openSquare(host, 0);
+  const undoBox = (await host.getByTestId("undo").boundingBox())!;
+  expect(undoBox.height).toBeGreaterThanOrEqual(44);
+  // One tap only asks; left alone, it goes back to "Undo" and nothing changes.
   await host.getByTestId("undo").click();
+  await expect(host.getByTestId("undo-confirm")).toHaveText("Confirm undo");
+  await expect(host.getByTestId("undo")).toHaveText("Undo", { timeout: 6_000 });
+  await expect(hostCell0).toHaveAttribute("data-completed", "true");
+  // Tap, then confirm (a second tap within ~350 ms counts as a double-tap and is ignored).
+  await host.getByTestId("undo").click();
+  await expect(host.getByTestId("undo-hint")).toHaveText("Tap again to reopen it for everyone.");
+  await host.waitForTimeout(500);
+  await host.getByTestId("undo-confirm").click();
   await expect(host.getByTestId("complete-hold")).toBeVisible();
   await closeSheet(host);
   await expect(hostCell0).toHaveAttribute("data-completed", "false");

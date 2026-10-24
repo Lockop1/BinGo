@@ -11,6 +11,8 @@ const baseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${port}`;
  */
 export default defineConfig({
   testDir: "./e2e",
+  // Fails fast if the local backend is down or its schema drifted from supabase/migrations.
+  globalSetup: "./e2e/global-setup.ts",
   // Kept inside a gitignored directory so runs leave the tree clean.
   outputDir: "node_modules/.cache/playwright-results",
   timeout: 60_000,

@@ -4,7 +4,7 @@ import { Download, Play } from "lucide-react";
 import { useState } from "react";
 import { ColorChip } from "@/components/recap/ColorChip";
 import { completedLines } from "@/components/recap/lines";
-import { slug, squareTitle, type RecapItem } from "@/components/recap/recapItems";
+import { recapTotals, slug, squareTitle, type RecapItem } from "@/components/recap/recapItems";
 import { downloadAllZip, type ZipProgress } from "@/components/recap/save";
 import { PencilButton } from "@/components/ui/PencilButton";
 import { BOARD_SIZE, type Game, type Player, type Square } from "@/lib/game/types";
@@ -41,12 +41,9 @@ export function RecapSummary({
   headingLevel: Heading = "h2",
 }: Props) {
   const [zip, setZip] = useState<ZipState>({ kind: "idle" });
-  const completed = squares.filter((s) => s.completed_at !== null).sort((a, b) => a.position - b.position);
+  // Counts only what is crossed off now; the album (items) keeps media from undone squares too.
+  const { completed, byPlayer: counts } = recapTotals(squares);
   const lines = completedLines(squares);
-  const counts = new Map<string, number>();
-  for (const s of completed) {
-    if (s.completed_by_player_id) counts.set(s.completed_by_player_id, (counts.get(s.completed_by_player_id) ?? 0) + 1);
-  }
   const ranked = [...players].sort(
     (a, b) => (counts.get(b.id) ?? 0) - (counts.get(a.id) ?? 0) || a.joined_at.localeCompare(b.joined_at),
   );

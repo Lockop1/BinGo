@@ -310,3 +310,43 @@ Two **Major** product bugs block "done":
 The green e2e result needs to be taken with care: the first run went against a **stale** local schema, and nothing detects that (**P3**). It is green on the committed schema too, but it never exercises Realtime, real Storage or concurrency.
 
 **Not ready to ship until P1 and P2 are fixed and P3 is guarded.** The hosted smoke test in DEPLOY.md is still required.
+
+---
+
+## Resolution
+
+Status of every finding above after the follow-up work. "Fixed in 0e6beed" is the committed Major-fix pass; "fixed in working tree" is the final polish pass (not committed yet). Gates after the polish pass: `npm run lint` clean, `npm run build` OK, `npm run test` 23 files / 314 tests, `npm run e2e` 20/20 against a drift-free `bingo_local`.
+
+### Section 2 findings
+
+| Id | Finding | Status |
+| --- | --- | --- |
+| P1 | Counter "+1" taps lost on concurrent / offline taps (Major) | **Fixed in 0e6beed**: `increment_square` takes a per-tap client `action_id` (dedup log `square_increments`) instead of a compare-and-set; `e2e/counters.spec.ts` and SQL test (v) cover simultaneous, offline and retried taps. |
+| P2 | Lobby Leave does not leave; an idle player blocks Start (Major) | **Fixed in 0e6beed**: lobby-only `leave_game`, host-only `remove_player` with inline confirm; `e2e/lobby-leave.spec.ts`. |
+| P3 | Local DB ran edited versions of applied migrations; nothing detected it (Major, test infra) | **Fixed in working tree**: `backend:status` re-hashes every applied migration and prints `DRIFT: <file> changed after it was applied — run: npm run backend:reset` (exit 4); `backend:start` prints the same warning without blocking; `e2e/global-setup.ts` (Playwright `globalSetup`) runs `status` and aborts the run when the backend is down (exit 3) or drifted (exit 4). Verified by appending a line to a migration (status exit 4, e2e aborted) and restoring it byte-for-byte (sha256 unchanged). |
+| P4 | Toasts cover the top bar (Minor) | **Fixed in working tree**: the toast now lives in the top bar's centre slot over the game name (same box, absolutely positioned, no layout shift); players / settings / album stay visible and tappable, nothing overlays the grid. Tap-to-open, queue timing and the reduced-motion fade are unchanged. While a sheet is open the toast sits under the sheet's scrim like the rest of the bar. |
+| P5 | "Share to group chat" fallback copies only the URL (Minor) | **Fixed in working tree**: `shareOrCopy` copies `text + "\n" + url`; the invite keeps copying the bare link (`{ copy: "url" }`). `src/lib/share.test.ts` and `e2e/media-wiring.spec.ts` assert the clipboard text. |
+| P6 | Lobby grid at 320/375: counter badge over the label, hyphenless word breaks (Nit) | **Fixed in working tree**: the `×N` badge takes its own corner row and the label gets the rest of the cell (2 lines); `.square-label` hyphenates first (`overflow-wrap: break-word` instead of `anywhere`, `lang="en"` already on `<html>`); lobby cells are size containers so labels with a long word drop a size step in cells under 60 px. |
+| P7 | Lobby dock cramped at 320 px (Nit) | **Fixed in working tree**: the status line wraps instead of truncating; below 360 px the dock buttons use a smaller label and padding so "Start game" stays on one line; buttons stay 56 px tall. |
+| P8 | Long player name pushes the square name out of the toast (Nit) | **Fixed in working tree**: the leading player name is capped with its own ellipsis (`min(14ch, 40%)`) and the toast text may use two lines, so the square label stays visible. |
+| P9 | Undo is one tap with no confirmation (Nit, UX) | **Fixed in working tree**: Undo → "Confirm undo" (second tap within ~4 s; a double-tap does not count), ≥44 px; `e2e/board.spec.ts` covers the revert and the confirm. |
+| P10 | Media loosely tied to its square (Nit) | **Partly fixed in working tree**: media on a square that was undone later stays in the album and recap with a correct caption ("Photo by <uploader> · not crossed off", never "On the house"); the summary counts only crossed-off squares (unit test in `recap.test.ts`). **Deferred**: `register_media` still does not check that the `<position>` segment matches or that the caller uploaded the object; that needs a new migration (out of scope for a client-only pass). Impact is low: only members can register, under their own game's prefix. |
+
+### Section 3 findings
+
+| Id | Finding | Status |
+| --- | --- | --- |
+| 3a "Supabase CLI migrations only" partial | Applied migrations edited after local application | **Process fixed**: the P3 drift guard now catches it locally (status, start, e2e). Nothing was ever pushed to a hosted project. |
+| 3a starter packs (nit) | "Bartender names a drink after us" is venue-framed | **Deferred**: judged acceptable (non-alcoholic framing in the pack copy); revisit during store review. |
+| 3b (f) | `YourGames` and `JoinScreen` membership rely on RLS alone | **Fixed in working tree**: both now filter explicitly through `players!inner(user_id)` with `.eq("players.user_id", <session uid>)` (RLS still applies on top). |
+| 3b (i) | User-generated names/labels have no filter or report path | **Deferred**: a product decision for store submission (App Store 1.2), not a code bug. |
+| 3b (j) | Docs vs code | `end_game` from the lobby, `config push`, README `backend:env` banner, missing `seed.sql`: **fixed in 9d875a0 / 0e6beed**. `.env.example` still omits `NEXT_PUBLIC_SYNC_POLL_MS` / `NEXT_PUBLIC_ENABLE_SW`: **deferred** (test-only knobs, set by `playwright.config.ts`). |
+| 3b (k) | Migrations never GRANT to `service_role` | **Fixed in 0e6beed**: explicit `service_role` grants; SQL test (s) checks them. |
+
+### Section 4 coverage gaps
+
+- 1 (concurrent / offline counters) and 2 (leave / idle players): **fixed in 0e6beed** (`counters.spec.ts`, `lobby-leave.spec.ts`).
+- 3 (no drift guard): **fixed in working tree** (P3).
+- 8 (overlap / cramping not asserted): **partly fixed**: board spec asserts the Undo target size; the 320 px layouts were checked by screenshot only.
+- 9 (`reuseExistingServer` may reuse a dev server without the e2e env): **deferred**: the global setup checks the backend, not the dev server's environment; start `npm run e2e` with no dev server running (or with the same env) until a check exists.
+- 4–7 and 10 (server rejections through PostgREST, Realtime, real Storage, untested flows, PG 16 shim): **deferred**: they need a hosted project or new specs; covered by the DEPLOY.md smoke test until then.

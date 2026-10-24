@@ -217,8 +217,9 @@ function StoryViewer({ items, names, getSignedUrls, onClose, startIndex = 0 }: P
   const saveState = save && item && save.id === item.media.id ? save.state : "idle";
 
   if (!item) return null;
-  const who = item.completer;
+  const who = item.state === "completed" ? item.completer : null;
   const by = item.uploader && item.uploader.id !== who?.id ? item.uploader : null;
+  const what = item.media.kind === "video" ? "video" : "photo";
   const slide = reduce ? 0 : 48;
 
   return (
@@ -354,21 +355,36 @@ function StoryViewer({ items, names, getSignedUrls, onClose, startIndex = 0 }: P
         </p>
         <div className="flex min-w-0 items-center gap-2">
           <p className="flex min-w-0 flex-1 items-center gap-2 text-lg leading-7" data-testid="story-player">
-            {who ? (
+            {item.state === "open" ? (
+              // Undone after this was added: no completer to credit, so credit the photo.
               <>
-                <ColorChip color={who.color} theme="dark" />
-                <span className="truncate" data-testid="story-completer">
-                  {who.display_name}
+                {by ? <ColorChip color={by.color} theme="dark" /> : null}
+                <span className="min-w-0 truncate" data-testid="story-uploader">
+                  {by ? `${what === "video" ? "Video" : "Photo"} by ${by.display_name}` : `A ${what}`}
+                </span>
+                <span className="shrink-0 text-base text-white/60" data-testid="story-open">
+                  · not crossed off
                 </span>
               </>
             ) : (
-              <span className="text-white/70">On the house</span>
+              <>
+                {who ? (
+                  <>
+                    <ColorChip color={who.color} theme="dark" />
+                    <span className="truncate" data-testid="story-completer">
+                      {who.display_name}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-white/70">{item.state === "free" ? "On the house" : "Someone"}</span>
+                )}
+                {by ? (
+                  <span className="min-w-0 truncate text-base text-white/60" data-testid="story-uploader">
+                    · {what} by {by.display_name}
+                  </span>
+                ) : null}
+              </>
             )}
-            {by ? (
-              <span className="min-w-0 truncate text-base text-white/60" data-testid="story-uploader">
-                · {item.media.kind === "video" ? "video" : "photo"} by {by.display_name}
-              </span>
-            ) : null}
           </p>
           {isVideo ? (
             <button

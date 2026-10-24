@@ -178,3 +178,22 @@ export function droppedNotices(dropped: readonly DroppedLike[], labelFor: (posit
   }
   return lines;
 }
+
+// ---------------------------------------------------------------------------
+// Display
+
+/**
+ * Splits "Jake got Skyline Chili" into the player name it starts with and the rest, so the
+ * toast can cap the name's width (a 24-character name must not push the square out of view).
+ * `names` are the game's display names; the longest one that prefixes the text, followed by a
+ * space, wins. Null when the text does not start with any of them (errors, "Someone …").
+ */
+export function splitLead(text: string, names: readonly string[]): { lead: string; rest: string } | null {
+  let best: string | null = null;
+  for (const name of names) {
+    if (name.length === 0 || text.length <= name.length || text[name.length] !== " ") continue;
+    if (!text.startsWith(name)) continue;
+    if (best === null || name.length > best.length) best = name;
+  }
+  return best === null ? null : { lead: best, rest: text.slice(best.length) };
+}

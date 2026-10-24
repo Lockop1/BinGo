@@ -195,3 +195,37 @@ export function appliedMigrations() {
   );
   return out ? out.split("\n") : [];
 }
+
+/**
+ * Applied migrations whose file on disk no longer matches the checksum recorded when it was
+ * applied (or that no longer exist). `[]` when nothing drifted or the DB / tracking table is
+ * missing. Each entry: `{ filename, reason: "changed" | "missing" }`.
+ */
+export function migrationDrift() {
+  if (!databaseExists()) return [];
+  if (psqlValue("select to_regclass('_local_backend.migrations') is not null;") !== "t") return [];
+  const rows = JSON.parse(
+    psqlValue(
+      "select coalesce(json_agg(json_build_array(filename, checksum) order by filename), '[]') from _local_backend.migrations;",
+    ),
+  );
+  const drift = [];
+  for (const [filename, checksum] of rows) {
+    const file = path.join(APP_MIGRATIONS_DIR, filename);
+    if (!existsSync(file)) {
+      drift.push({ filename, reason: "missing" });
+      continue;
+    }
+    const actual = createHash("sha256").update(readFileSync(file)).digest("hex");
+    if (actual !== checksum) drift.push({ filename, reason: "changed" });
+  }
+  return drift;
+}
+
+/** The one-line warning for a drifted migration (status, start and the e2e global setup print it). */
+export function driftMessage({ filename, reason }) {
+  const file = displayPath(path.join(APP_MIGRATIONS_DIR, filename));
+  return reason === "missing"
+    ? `DRIFT: ${file} was applied but is missing on disk — run: npm run backend:reset`
+    : `DRIFT: ${file} changed after it was applied — run: npm run backend:reset`;
+}

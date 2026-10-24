@@ -29,6 +29,12 @@ function gridPaths(): string[] {
 }
 const PATHS = gridPaths();
 
+/** A word this long rarely fits a 320 px phone's cell: CSS sets it a step smaller there. */
+const LONG_WORD = 9;
+function longWord(label: string): true | undefined {
+  return label.split(/\s+/).some((word) => word.length >= LONG_WORD) || undefined;
+}
+
 /** The 5×5 lobby board on paper. Only labels show here; details live in the sheet. */
 export function LobbyBoard({
   squares,
@@ -55,7 +61,7 @@ export function LobbyBoard({
               ? `Center: free space${label ? `, ${label}` : ""}`
               : `Square ${square.position + 1}: ${label || "empty"}${counter ? `, counter to ${counter}` : ""}`;
             return (
-              <li key={square.position} className="aspect-square min-w-0">
+              <li key={square.position} className="lobby-cell aspect-square min-w-0">
                 <button
                   type="button"
                   onClick={() => onSelect(square.position)}
@@ -64,37 +70,55 @@ export function LobbyBoard({
                   data-free={isFree}
                   data-pending={square.pending || undefined}
                   aria-label={name}
-                  className={`relative flex size-full min-w-0 flex-col items-center justify-center overflow-hidden p-1 text-center text-ink focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-ink active:bg-highlight/60 ${
-                    square.pending ? "text-ink-soft" : ""
-                  }`}
+                  className={`relative flex size-full min-w-0 flex-col items-center overflow-hidden p-1 text-center text-ink focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-ink active:bg-highlight/60 ${
+                    counter && !isFree ? "justify-start pt-0" : "justify-center"
+                  } ${square.pending ? "text-ink-soft" : ""}`}
                   style={{ transform: `rotate(${(jitter(square.position + 40) * 0.6).toFixed(2)}deg)` }}
                 >
-                  {isFree ? (
-                    <>
-                      <span className="text-xl leading-6 tracking-wider">FREE</span>
-                      {label ? (
-                        <span className="square-label text-ink-soft" data-size="sm">
-                          {label}
-                        </span>
-                      ) : null}
-                    </>
-                  ) : label ? (
-                    <span className="square-label" data-size={labelSize(label)}>
-                      {label}
-                    </span>
-                  ) : (
-                    <span aria-hidden className="text-lg leading-none text-ink-faint">
-                      +
-                    </span>
-                  )}
+                  {/* A counter's "×15" gets its own row in the top-right corner (never over the
+                      label); the label takes the rest of the cell, two lines at most. */}
                   {counter && !isFree ? (
                     <span
-                      className="absolute right-0.5 top-0 text-[11px] leading-[14px] text-ink-soft"
+                      className="shrink-0 self-end pr-px text-[11px] leading-[13px] text-ink-soft"
                       data-testid="counter-badge"
                     >
                       ×{counter}
                     </span>
                   ) : null}
+                  {isFree ? (
+                    <>
+                      <span className="text-xl leading-6 tracking-wider">FREE</span>
+                      {label ? (
+                        <span className="square-label text-ink-soft" data-size="sm" data-long-word={longWord(label)}>
+                          {label}
+                        </span>
+                      ) : null}
+                    </>
+                  ) : label ? (
+                    counter ? (
+                      <span className="flex min-h-0 w-full min-w-0 flex-1 items-center justify-center pb-0.5">
+                        <span
+                          className="square-label"
+                          data-size={labelSize(label)}
+                          data-lines="2"
+                          data-long-word={longWord(label)}
+                        >
+                          {label}
+                        </span>
+                      </span>
+                    ) : (
+                      <span className="square-label" data-size={labelSize(label)} data-long-word={longWord(label)}>
+                        {label}
+                      </span>
+                    )
+                  ) : (
+                    <span
+                      aria-hidden
+                      className={`text-lg leading-none text-ink-faint ${counter ? "flex flex-1 items-center" : ""}`}
+                    >
+                      +
+                    </span>
+                  )}
                 </button>
               </li>
             );

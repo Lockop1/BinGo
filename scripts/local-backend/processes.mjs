@@ -26,7 +26,7 @@ import {
   envLines,
   postgrestConfig,
 } from "./config.mjs";
-import { appliedMigrations, databaseExists } from "./db.mjs";
+import { appliedMigrations, databaseExists, driftMessage, migrationDrift } from "./db.mjs";
 import { startProxy } from "./proxy.mjs";
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), "cli.mjs");
@@ -244,8 +244,22 @@ async function startForeground() {
   console.log("Press Ctrl+C to stop.");
 }
 
+/** Prints a DRIFT line per drifted migration; returns how many drifted. Never throws. */
+function warnDrift({ stream = console.log } = {}) {
+  try {
+    const drift = migrationDrift();
+    for (const entry of drift) stream(driftMessage(entry));
+    return drift.length;
+  } catch (err) {
+    stream(`database  could not check migration checksums: ${err.message.split("\n")[0]}`);
+    return 0;
+  }
+}
+
 export async function start({ detach = false } = {}) {
   await preflight();
+  // A drifted schema still starts (so you can inspect it), but say so loudly.
+  warnDrift({ stream: console.warn });
   console.log(`start: launching local backend${detach ? " (detached)" : ""}`);
   if (detach) await startDetached();
   else await startForeground();
@@ -295,16 +309,19 @@ export async function status() {
     const pidText = pid ? `pid ${pid}${running ? "" : " (stale)"}` : "no pid file";
     console.log(`${service.name.padEnd(9)} ${state.padEnd(22)} ${pidText.padEnd(18)} http://${HOST}:${service.port}`);
   }
+  let drifted = 0;
   try {
     const applied = appliedMigrations();
-    console.log(
-      applied === null
-        ? "database  bingo_local does not exist (run reset)"
-        : `database  bingo_local, ${applied.length} app migration(s) applied`,
-    );
+    if (applied === null) {
+      allUp = false;
+      console.log("database  bingo_local does not exist (run reset)");
+    } else {
+      console.log(`database  bingo_local, ${applied.length} app migration(s) applied`);
+      drifted = warnDrift();
+    }
   } catch (err) {
     allUp = false;
     console.log(`database  unreachable: ${err.message.split("\n")[0]}`);
   }
-  return allUp;
+  return { allUp, drifted };
 }

@@ -2,6 +2,9 @@
 
 import { PencilButton } from "@/components/ui/PencilButton";
 
+/** One line at every width: a step smaller below 360 px, where two 24 px labels would wrap. */
+const DOCK_BUTTON = "px-2! text-xl min-[360px]:px-3! min-[360px]:text-2xl";
+
 /**
  * Bottom-anchored actions within thumb reach: my Ready toggle and, for the
  * host, Start game (enabled only when every player is ready).
@@ -40,7 +43,8 @@ export function LobbyDock({
   return (
     <div className="lobby-dock fixed inset-x-0 bottom-0 z-30 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[calc(var(--margin-x)+12px)] pr-4 pt-2">
       <div className="mx-auto flex w-full max-w-xl min-w-0 flex-col gap-1.5">
-        <p className="truncate text-lg leading-7 text-ink-soft" data-testid="lobby-status" aria-live="polite">
+        {/* Wraps instead of cutting off on a 320 px phone (the lobby keeps room for two lines). */}
+        <p className="text-pretty text-lg leading-6 text-ink-soft" data-testid="lobby-status" aria-live="polite">
           {status}
         </p>
         {error ? (
@@ -55,7 +59,7 @@ export function LobbyDock({
             aria-busy={readyBusy || undefined}
             data-testid="ready-toggle"
             data-ready={ready}
-            className="min-h-14 min-w-0 flex-1 px-3 text-2xl"
+            className={`min-h-14 min-w-0 flex-1 whitespace-nowrap ${DOCK_BUTTON}`}
           >
             {ready ? "Not ready" : "I'm ready"}
           </PencilButton>
@@ -65,7 +69,7 @@ export function LobbyDock({
               disabled={!allReady}
               busy={startBusy}
               data-testid="start-game"
-              className="min-h-14 min-w-0 flex-1 px-3 text-2xl"
+              className={`min-h-14 min-w-0 flex-1 whitespace-nowrap ${DOCK_BUTTON}`}
             >
               Start game
             </PencilButton>
