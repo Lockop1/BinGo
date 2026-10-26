@@ -9,7 +9,8 @@ import type { Database } from "@/types/database";
  * (ESLint enforces that). Keeping the logic here makes it testable with a fake.
  *
  * Steps:
- *  1. rpc("auto_end_due_games"): end active games past auto_end_at.
+ *  1. rpc("auto_end_due_games"): end active games past their deadline_at (the
+ *     backstop: phones already treat them as ended).
  *  2. Select games with expires_at < now (ids only, oldest first, capped).
  *  3. Per expired game: delete every object under `game-media/<game_id>/`
  *     (walking folders recursively, since Storage list() is per folder,

@@ -285,7 +285,7 @@ export function useGame(gameId: string, options: UseGameOptions = {}): UseGameRe
   const ended = state.status === "ready" && effectiveStatus(state.game) === "ended";
   const rematchWatchFrom =
     state.status === "ready" && ended && !state.game.next_join_code
-      ? (state.game.ended_at ?? state.game.auto_end_at)
+      ? (state.game.ended_at ?? state.game.deadline_at)
       : null;
   useEffect(() => {
     if (!ready || !visible) return;

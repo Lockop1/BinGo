@@ -1,13 +1,16 @@
 import type { Database, Tables } from "@/types/database";
 
 type GameRow = Tables<"games">;
-type RematchColumns = "next_game_id" | "next_join_code";
+type OptionalColumns = "next_game_id" | "next_join_code" | "deadline_extended_at" | "updated_at";
 /**
- * A `games` row. The rematch columns (set by `play_again`) are optional on the
- * client: game snapshots cached in `bingo.activeGame` by builds from before
- * they existed are restored as they were saved. Read them with `?? null`.
+ * A `games` row. The rematch columns (set by `play_again`),
+ * `deadline_extended_at` (set by `extend_deadline`) and `updated_at` (the row
+ * version `mergeGame` compares) are optional on the client: game snapshots
+ * cached in `bingo.activeGame` by builds from before they existed are restored
+ * as they were saved. Read them with `?? null`. `deadline_at` is always present
+ * (`activeGame.ts` fills it in for such older snapshots).
  */
-export type Game = Omit<GameRow, RematchColumns> & Partial<Pick<GameRow, RematchColumns>>;
+export type Game = Omit<GameRow, OptionalColumns> & Partial<Pick<GameRow, OptionalColumns>>;
 export type Player = Tables<"players">;
 export type Square = Tables<"squares">;
 export type Media = Tables<"media">;
@@ -35,15 +38,13 @@ export const CENTER_POSITION = 12;
 
 /**
  * The status every RPC acts on (CLAUDE.md > Database API > Effective status):
- * an `active` game whose `auto_end_at` has passed is treated as ended even
+ * an `active` game whose `deadline_at` has passed is treated as ended even
  * before the daily cron sets `status = 'ended'`.
  */
 export function effectiveStatus(
-  game: Pick<Game, "status" | "auto_end_at">,
+  game: Pick<Game, "status" | "deadline_at">,
   now: Date = new Date(),
 ): GameStatus {
-  if (game.status === "active" && game.auto_end_at !== null) {
-    if (new Date(game.auto_end_at).getTime() <= now.getTime()) return "ended";
-  }
+  if (game.status === "active" && new Date(game.deadline_at).getTime() <= now.getTime()) return "ended";
   return game.status;
 }

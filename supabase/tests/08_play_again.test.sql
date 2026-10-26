@@ -56,7 +56,7 @@ begin
   perform tests.login_anon();
   perform tests.is(to_jsonb(public.peek_game_public(f.join_code)) ->> 'status', 'active', 'active');
   perform tests.logout();
-  update public.games set auto_end_at = now() - interval '1 minute' where id = f.game_id;
+  perform tests.pass_deadline(f.game_id);
   perform tests.login_anon();
   perform tests.is(to_jsonb(public.peek_game_public(f.join_code)) ->> 'status', 'ended', 'overdue reads as ended');
   perform tests.login(f.users[1]);
@@ -119,10 +119,12 @@ begin
   perform tests.throws(format('select public.play_again(%L)', gen_random_uuid()), 'game_not_found', 'unknown game');
   perform tests.throws('select public.play_again(null)', 'game_not_found', 'null game id');
 
-  -- Overdue (active past auto_end_at, cron not run yet) counts as ended. A
-  -- non-host player starts the rematch.
+  -- Overdue (active past deadline_at, cron not run yet) counts as ended, even
+  -- after the host's one extension. A non-host player starts the rematch.
+  perform tests.login(f.users[1]);
+  perform tests.ok((public.extend_deadline(f.game_id, now() + interval '30 hours')).deadline_extended_at is not null, 'old game extended');
   perform tests.logout();
-  update public.games set auto_end_at = now() - interval '1 minute' where id = f.game_id;
+  perform tests.pass_deadline(f.game_id);
   perform tests.login(f.users[2]);
   v_new := public.play_again(f.game_id);
 
@@ -134,7 +136,9 @@ begin
   perform tests.ok(v_new.join_code ~ '^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$', 'fresh join code format');
   perform tests.ok(v_new.join_code <> f.join_code, 'a new join code');
   perform tests.is(v_new.expires_at, v_new.created_at + interval '30 days', 'expires_at = created_at + 30 days');
-  perform tests.ok(v_new.started_at is null and v_new.auto_end_at is null and v_new.ended_at is null, 'no timestamps yet');
+  perform tests.ok(v_new.started_at is null and v_new.ended_at is null, 'no timestamps yet');
+  perform tests.is(v_new.deadline_at, now() + interval '24 hours', 'rematch deadline: 24 hours from now (the host edits it in the lobby)');
+  perform tests.is(v_new.deadline_extended_at, null::timestamptz, 'rematch not extended (the old game was)');
   perform tests.ok(v_new.next_game_id is null and v_new.next_join_code is null, 'no rematch of the rematch yet');
 
   -- The caller is its only player: color 0, not ready, their old display name.

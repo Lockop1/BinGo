@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { MAX_QUEUED, TOAST_MS, createToastQueue, mediaToasts, splitLead } from "@/lib/game/toasts";
+import {
+  DEADLINE_TOAST_TEXT,
+  MAX_QUEUED,
+  TOAST_MS,
+  createToastQueue,
+  deadlineToast,
+  mediaToasts,
+  noteDeadlineToastShown,
+  readDeadlineToastShown,
+  shouldShowDeadlineToast,
+  splitLead,
+} from "@/lib/game/toasts";
 import { manualClock } from "@/lib/game/testFixtures";
 
 function setup() {
@@ -125,5 +136,45 @@ describe("splitLead", () => {
     expect(splitLead("Jake", ["Jake"])).toBeNull();
     expect(splitLead("Someone added a photo", ["Jake", ""])).toBeNull();
     expect(splitLead("Couldn't save Pool", [])).toBeNull();
+  });
+});
+
+describe("deadline toast", () => {
+  const now = new Date("2026-10-26T01:00:00.000Z");
+  const at = (minutes: number) => new Date(now.getTime() + minutes * 60_000).toISOString();
+
+  it("is the single tappable '1 hour left.' line that opens the Players sheet", () => {
+    const { queue } = setup();
+    const toast = queue.push(deadlineToast())!;
+    expect(toast).toMatchObject({ text: DEADLINE_TOAST_TEXT, tone: "info", color: null, position: null, target: "players" });
+    expect(DEADLINE_TOAST_TEXT).toBe("1 hour left.");
+    // Other toasts carry no target.
+    expect(queue.push({ text: "Jake got Pool", position: 3 })).not.toHaveProperty("target");
+  });
+
+  it("shows only while under one hour and not passed", () => {
+    expect(shouldShowDeadlineToast(null, at(61), now)).toBe(false);
+    expect(shouldShowDeadlineToast(null, at(60), now)).toBe(false);
+    expect(shouldShowDeadlineToast(null, at(59), now)).toBe(true);
+    expect(shouldShowDeadlineToast(null, at(0.1), now)).toBe(true);
+    expect(shouldShowDeadlineToast(null, at(0), now)).toBe(false);
+    expect(shouldShowDeadlineToast(null, at(-5), now)).toBe(false);
+    expect(shouldShowDeadlineToast(null, null, now)).toBe(false);
+    expect(shouldShowDeadlineToast(null, "nonsense", now)).toBe(false);
+  });
+
+  it("shows once per deadline value, comparing instants not strings", () => {
+    const deadline = "2026-10-26T01:30:00+00:00";
+    expect(shouldShowDeadlineToast(deadline, deadline, now)).toBe(false);
+    expect(shouldShowDeadlineToast("2026-10-26T01:30:00.000Z", deadline, now)).toBe(false);
+    // An extension moved the deadline: one new warning once it is within the hour again.
+    const extended = "2026-10-26T02:30:00+00:00";
+    expect(shouldShowDeadlineToast(deadline, extended, now)).toBe(false);
+    expect(shouldShowDeadlineToast(deadline, extended, new Date("2026-10-26T01:31:00.000Z"))).toBe(true);
+  });
+
+  it("reading and noting the shown deadline never throws without storage", () => {
+    expect(readDeadlineToastShown("g1")).toBeNull();
+    expect(() => noteDeadlineToastShown("g1", at(30))).not.toThrow();
   });
 });

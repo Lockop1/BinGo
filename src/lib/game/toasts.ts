@@ -4,6 +4,8 @@
  * be unit-tested; the board subscribes with useSyncExternalStore.
  */
 
+import { readLocal, writeLocal } from "@/lib/storage/local";
+
 export type ToastTone = "info" | "error";
 
 export type Toast = {
@@ -14,10 +16,14 @@ export type Toast = {
   color: number | null;
   /** Square the toast is about; tapping it opens that square's sheet. */
   position: number | null;
+  /** A sheet to open on tap instead of a square's (the deadline warning opens Players). */
+  target?: ToastTarget;
 };
 
-export type ToastInput = Omit<Toast, "id" | "tone" | "color" | "position"> &
-  Partial<Pick<Toast, "id" | "tone" | "color" | "position">>;
+export type ToastTarget = "players";
+
+export type ToastInput = Omit<Toast, "id" | "tone" | "color" | "position" | "target"> &
+  Partial<Pick<Toast, "id" | "tone" | "color" | "position" | "target">>;
 
 export type ToastState = {
   current: Toast | null;
@@ -88,6 +94,7 @@ export function createToastQueue(options: ToastQueueOptions = {}): ToastQueue {
         tone: input.tone ?? "info",
         color: input.color ?? null,
         position: input.position ?? null,
+        ...(input.target ? { target: input.target } : {}),
       };
       // The same news twice in a row (e.g. a duplicate delivery) shows once.
       const last = state.queued[state.queued.length - 1] ?? state.current;
@@ -152,6 +159,46 @@ export function mediaToasts(seen: ReadonlySet<string>, media: readonly MediaLike
     });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Deadline warning
+
+/** The one warning a phone gets as the deadline nears (CLAUDE.md > Client architecture > Deadline). */
+export const DEADLINE_TOAST_TEXT = "1 hour left.";
+
+/** The "1 hour left." toast; tapping it opens the Players sheet (deadline line and host controls). */
+export function deadlineToast(): ToastInput {
+  return { text: DEADLINE_TOAST_TEXT, target: "players" };
+}
+
+const HOUR_MS = 3_600_000;
+
+/**
+ * Whether to show the "1 hour left." toast now: the deadline is less than an
+ * hour away (and not passed), and this phone has not shown it for this
+ * deadline value yet. `shownFor` is the deadline (ISO) it was last shown for;
+ * values compare as instants, so `…+00:00` and `….000Z` are the same deadline.
+ * An extension moves the deadline, so it may warn once more when the new one
+ * comes within the hour.
+ */
+export function shouldShowDeadlineToast(shownFor: string | null, deadlineIso: string | null, now: Date): boolean {
+  if (!deadlineIso) return false;
+  const deadline = Date.parse(deadlineIso);
+  if (Number.isNaN(deadline)) return false;
+  const left = deadline - now.getTime();
+  if (!(left > 0 && left < HOUR_MS)) return false;
+  return shownFor === null || Date.parse(shownFor) !== deadline;
+}
+
+/** `bingo.deadlineToast.<gameId>`: the deadline this phone last warned about. */
+export function readDeadlineToastShown(gameId: string): string | null {
+  const value = readLocal(`bingo.deadlineToast.${gameId}`);
+  return typeof value === "string" ? value : null;
+}
+
+export function noteDeadlineToastShown(gameId: string, deadlineIso: string): void {
+  writeLocal(`bingo.deadlineToast.${gameId}`, deadlineIso);
 }
 
 // ---------------------------------------------------------------------------

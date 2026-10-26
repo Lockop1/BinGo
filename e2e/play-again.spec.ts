@@ -281,7 +281,7 @@ test("play again: a quiet link on the recap starts a rematch lobby with the same
     await rpcAs(friendContext, "end_game", { game_id: newId });
     // The host is a player of the rematch, so the link looks it up by a member select.
     const lookup = host.waitForResponse(
-      (r) => r.url().includes("/rest/v1/games") && r.url().includes(`id=eq.${newId}`) && r.url().includes("auto_end_at"),
+      (r) => r.url().includes("/rest/v1/games") && r.url().includes(`id=eq.${newId}`) && r.url().includes("deadline_at"),
     );
     await host.goto(`/game/${gameId}`);
     await expect(host.getByTestId("recap-summary")).toBeVisible(LIVE);

@@ -52,12 +52,14 @@ redeploy, not just a restart.
 
 Open the preview URL on two phones (or a phone and an incognito window):
 
-- [ ] Home → New game → Night Out → lobby shows the code.
+- [ ] Home → New game → Night Out → pick a deadline (default "Tonight (3 AM)") → lobby
+      shows the code and the deadline.
 - [ ] Second phone joins via the invite link; both see two players with
       different colors **within a second** (Realtime). If it takes ~15 s, the
       publication is missing a table or RLS blocks the event: check
       Replication and that the joiner is a member.
-- [ ] Both ready → Start → the start transition plays on both phones.
+- [ ] Both ready → Start → the start transition plays on both phones; a small
+      countdown sits next to the game name.
 - [ ] Complete a square → cross-off + toast on the other phone.
 - [ ] Add a photo → status reaches "Photo added"; open **Storage →
       game-media** and confirm the object under `<game_id>/<position>/`.

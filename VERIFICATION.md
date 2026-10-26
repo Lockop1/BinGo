@@ -626,3 +626,255 @@ The rest are nits.
 - **P19** deferred: rematch colours follow join order; keeping colours needs a `play_again` / `join_game` change in SQL.
 - **P20** fixed in working tree (UI half): the old recap looks up the rematch's effective status (member `select` when readable, else `peek_game_public(next_join_code)`, not-found = expired) and shows no rematch link once it has ended (`rematchKind` unit-tested, e2e step "once the rematch has ended…"). `play_again` accepting an expired old game is deferred (harmless; a migration).
 - **P21** fixed in working tree: the logo's red line is now a three-pass marker scribble (up, hooked turn, back down, half-way up) through the diagonal cell centres, same colours and widths; `logo-16.svg` keeps a single clean diagonal; every PNG and `favicon.ico` regenerated with `scripts/make-icons.mjs` and checked by eye at 192 px and 32 px.
+
+## Phase 11 verification (2026-10-26)
+
+**Scope:** the host-set game deadline (`games.deadline_at`) that replaced the fixed 24-hour auto-end (11a migration + RPCs, 11b presets / picker, 11c create / lobby / board / recap wiring). Independent agent that did not build it; nothing was fixed. This section is the only change to the repo (`git status` shows only `VERIFICATION.md`).
+**Environment:** local stand-in backend (`127.0.0.1:54321`, `bingo_local`), Postgres 16 (`bingo_test` for SQL), Chromium via Playwright 1.63 with `next dev` on :3000 (`NEXT_PUBLIC_SYNC_POLL_MS=1500`, `NEXT_PUBLIC_ENABLE_SW=1`; stopped afterwards). Wall clock during the run: Sun 2026-10-25 ~23:45–00:10 in New York, which happened to exercise the "Sunday night" edge of the weekend preset live.
+**Evidence** (scratchpad, outside the repo): `/tmp/claude-0/-home-user-BinGo/8bb7be13-4a03-5c1c-a267-bab4a95a5cb6/scratchpad/`
+- scripts: `v11-probe.mjs` (REST probes, 71 lines of output), `v11-probe2.mjs` (expiry / old lobby), `v11-db.sql` (psql schema / cron), `v11-tzhdr.mjs` (session time zone), `v11-tz.mts` (preset time-zone matrix, run with `node --experimental-strip-types --import ./v11-alias.mjs`), `v11-ux.mjs` (two-phone playthrough), `v11-ux2.mjs` / `v11-ux3.mjs` (skewed clocks, offline extension, stale-row provocation), `v11-drift.mjs` (picker drift);
+- logs: `v11-*.log`, `v11-tz-table.md` (all 146 cases); screenshots: `v11-ux/`, `v11-ux2/`, `v11-ux3/`, `v11-drift/`.
+
+### 11.1 Gate results
+
+| Gate | Result | Exact output |
+| --- | --- | --- |
+| `npm run lint` | **pass** (exit 0) | `> eslint`, no findings |
+| `npm run build` | **pass** (exit 0) | Next.js 16.4.3 (Turbopack), compiled in 511 ms, TypeScript OK, 9/9 static pages; routes unchanged (`/g/[code]` and `/game/[id]` ◐) |
+| `npm run test` | **pass** (exit 0) | `Test Files 30 passed (30)`, `Tests 462 passed (462)` |
+| `npm run db:test` | **pass** (exit 0) | `==> 34 passed, 0 failed`; new: (ac) create deadline, (ad) `set_deadline`, (ae) `extend_deadline`, (af) `deadline_passed`, (ag) effective status past the deadline, (ah) deadline schema; (m) / (p) now use `deadline_at` |
+| `npm run e2e` | **pass** (exit 0) | `25 passed, 1 skipped (5.0m)`; the skip is `analytics.spec.ts` (needs a PostHog host, as in Phase 10); `deadline.spec.ts` passed in 46.4 s |
+
+### 11.2 Findings
+
+No Blocker or Major. The database enforces every deadline rule I probed, the presets land on the right wall-clock time in every zone and DST case I tried, and the board countdown is quiet.
+
+**P22. The 1-day extension cap and the 7-day maximum follow the request's session time zone, which any client can set. Severity: Minor.**
+- **Repro** (`v11-tzhdr.mjs`): an active game with `deadline_at = 2026-10-31T12:00Z`; `extend_deadline(…, '2026-11-01T13:00Z')` (+25 h, across the New York fall-back) → `400 invalid_deadline`; the same call with the header `Prefer: timezone=America/New_York` → `200`, stored `2026-11-01T08:00-05:00` (PostgREST answered `Preference-Applied: timezone=America/New_York`). Likewise `create_game(deadline_at = now + 7 d 1 h 5 min)` → `invalid_deadline` normally, `200` with the header.
+- **Expected:** "at most current `deadline_at` + 1 day (exact, no slack)" and "now + 9 min … now + 7 days 10 min" (CLAUDE.md, Database API).
+- **Actual:** `extend_deadline` uses `interval '1 day'` and `private.validate_deadline` uses `interval '7 days'`; for `timestamptz` the day part is a calendar day in the session `TimeZone` (23 h or 25 h across DST). Only search_path is pinned. Local default is `Etc/UTC`, so normal clients and the SQL suite never see it. Impact is one hour, at most, near a DST change.
+- **Files:** `supabase/migrations/20261026024940_game_deadline.sql` (`validate_deadline`, `extend_deadline`).
+- **Suggestion:** a new migration that uses `interval '24 hours'` / `'168 hours'` (or `set timezone = 'UTC'` on the functions), plus a SQL test under `set local timezone = 'America/New_York'`.
+
+**P23. A stale games row can briefly undo the host's extension and offer Extend again. Severity: Minor.**
+- **Repro** (`v11-ux3.mjs` part C, `v11-ux2.mjs` last check): a host phone whose `games` reads arrive 1.4 s late (Playwright route; a slow bar connection), the host completes squares just before and after tapping Extend +3 h. The sampled countdown went `2h 56m → 5h 56m → 2h 56m → 5h 56m`. During the ~1.4 s revert the reopened Players sheet showed "Extend deadline" again (`ext=1`), where it had said "Deadline extended once". Reproduced in 2 of 4 runs with square taps, 0 of 3 runs without them.
+- **Expected:** once a phone has shown the extension, it never shows the old deadline again.
+- **Cause:** `fetchOnce` (`useGame.ts`) retries a fetch that raced a mutation only `RACE_RETRIES = 2` times, then accepts it. `mergeGame` (`realtime.ts`) accepts any games row of the same status, because games have no `updated_at` to compare (squares do). So the last attempt's games row, read before the extension committed, overwrites the RPC result. On a hosted project, Realtime square events count as mutations too, so a friend's phone can hit the same path.
+- **Effect:** transient (until the next poll or games event). A second Extend tap gets "The deadline can only be extended once." If the old deadline falls inside the window, the phone flips to the recap and back. The same race can revert a lobby `set_deadline` on the host's phone.
+- **Files:** `src/lib/game/realtime.ts` (`mergeGame`), `src/lib/game/useGame.ts` (`fetchOnce`).
+- **Suggestion:** while active, never take a row with `deadline_extended_at = null` over one that has it set (a live deadline only moves once, later); or add a games `updated_at` and compare it like squares.
+
+**P24. A phone with a wrong clock ends the game early or late. Severity: Minor (phones normally sync their clock from the network).**
+- **Repro** (`v11-ux2.mjs`, `v11-ux3.mjs` part A; Playwright `clock.install` at ±10 min):
+  - Deadline set to real now + 5 min. The **fast** phone went to the recap 0.95 s later. Host, friend and slow phone still showed `4m`, `4m` and `14m`, and the server still accepted the host's completion (`square 1 completed = t`).
+  - After the real deadline, the **slow** phone stayed on the board showing `10m`. A tap there showed "Couldn't save Sing on stage at karaoke — the game had already ended", and the board stayed up.
+  - In the lobby the fast phone read `· 23h 49m` while the others read `23h 59m`. The "1 hour left." toast follows the phone clock too.
+- **Expected** (spec 4): the game ends for everyone at the deadline.
+- **Actual:** `effectiveStatus`, `useRerenderAt`, the countdowns and the toast all compare `deadline_at` with the phone's `Date.now()`. There is no server-time offset, and a `game_not_active` answer does not end the game on that phone. TESTING.md §14 already tells testers to note a wrong phone clock.
+- **Files:** `src/lib/game/types.ts` (`effectiveStatus`), `src/components/game/GameScreen.tsx` (`useRerenderAt`), `src/lib/deadline/useNow.ts`, `src/lib/game/pendingActions.ts`.
+- **Suggestion:** estimate a server clock offset (e.g. from fetch `Date` headers) and apply it to all deadline maths; treat `game_not_active` as "ended" and resync.
+
+**P25. Picker drift: Create is greyed out with no reason, then the deadline jumps by a day (or a week). Severity: Nit.**
+- **Repro** (`v11-drift.mjs`, New York phone clock 02:49:40, Tonight selected):
+  - 02:49:41: "Tonight 3:00 AM · 10m", Create enabled.
+  - 02:50:12: "· 9m", Create **disabled**, with no message.
+  - 02:50:42: the row silently becomes "Tomorrow 3:00 AM · 1d", and Create is enabled again.
+  - With "This weekend" clamped (Sunday 23:49:41), Create was disabled for about 15 s right after the tap.
+- **Cause:** the picker's re-resolve clock ticks every 60 s (`useNow(60_000)`), while the form's validity clock ticks every 15 s (`useNow(15_000)`) and is older than the clamped value.
+- **Lobby:** no unintended RPC. While the Change sheet's draft drifted, `set_deadline` was called 0 times and the lobby line was unchanged (only Save sends).
+- **Files:** `src/components/deadline/DeadlinePicker.tsx`, `src/components/create/CreateGameForm.tsx`.
+- **Suggestion:** one shared clock (or re-resolve the selected preset on submit), and a short line when a preset rolls over.
+
+**P26. "This weekend (Sunday 11:59 PM)" does not give 11:59 PM late on Sunday or in the week of a fall-back. Severity: Nit.**
+- From Sunday 23:49 on, it clamps to now + 7 days ("Sun, Nov 15, 11:55 PM").
+- Seen live today in New York at 23:54: the row read "This weekend (Sunday 11:59 PM)" next to "Sun, Nov 1, 10:54 PM". 7 × 24 h across the Nov 1 fall-back ends an hour earlier on the wall clock.
+- The row shows the real time, so nothing is hidden. Only the label and the value disagree.
+- **File:** `src/lib/deadline/presets.ts` (`computePreset`).
+
+**P27. At 320 px a long game name shrinks to two letters next to the countdown. Severity: Nit.**
+- **Repro:** a 60-character "W…" name at 320 px: the title is 59 px ("WW…") and the countdown keeps its full "23h 59m" (`shrink-0`) (`v11-ux2/02-topbar-xlarge-320.png`).
+- No horizontal scroll at any text size. The countdown stays 16 px whatever the text-size setting.
+- **File:** `src/components/board/TopBar.tsx`.
+
+**P28. `join_game` still renames an existing member after the deadline. Severity: Nit (pre-existing pattern).**
+- **Repro:** probe e4b. A member calls `join_game(code, 'Bobby')` on an active game past `deadline_at` → `200`, `display_name = 'Bobby'`.
+- The rename guard is `v_game.status <> 'ended'` (raw status), while every other check uses the effective status. CLAUDE.md says "updates display_name unless ended".
+- **File:** migration `join_game`.
+
+**P29. A lobby left open for more than 23 days can get a deadline after its album expiry. Severity: Nit (also noted in the builder's PHASES status).**
+- **Repro:** `v11-probe2.mjs`. A lobby with `expires_at` 2 days away accepted `set_deadline(now + 6 d)` (`deadline_at > expires_at = t`).
+- The cron would delete the game before its deadline.
+- **Suggestion:** cap at `least(now + 7 d, expires_at)` for `set_deadline`.
+
+**P30. TESTING.md §6 step 12's "If it fails" line is misleading. Severity: Nit (docs).**
+- It says "The deadline can only be extended once." on a first try, or "Only the host can do that.", means the `game_deadline` migration isn't pushed.
+- A missing migration makes `extend_deadline` unknown to PostgREST, so the phone would show the generic error copy, not those codes. And with the old schema the board would not load at all.
+
+### 11.3 DB probe table
+
+REST rows ran as real anonymous users against `127.0.0.1:54321` (`v11-probe.log`: 64 OK, 4 BAD; each BAD is explained in the table). psql rows ran on `bingo_test` (`v11-db.log`).
+
+| # | Probe | Result | Evidence |
+| --- | --- | --- | --- |
+| a1 | `create_game` with `deadline_at` null / omitted | **pass** | `deadline_at − created_at = 86400.000000 s` both ways |
+| a2–a3 | now + 5 min; now + 8 days | **pass** | `invalid_deadline` / `invalid_deadline` |
+| a4–a5 | exactly now + 10 min; exactly now + 7 days | **pass** | both 200 |
+| a6–a9 | slack edges: + 9 min 30 s; + 8 min 50 s; + 7 d 9 min; + 7 d 11 min | **pass** | 200 / `invalid_deadline` / 200 / `invalid_deadline` |
+| a10–a14 | past time; `"tonight"`; blank name with a bad deadline; an offset string; the returned row | **pass** | `invalid_deadline`; `22007` cast error; `invalid_name` first; `…03:00-04:00` stored as `07:00Z`; `deadline_extended_at` null |
+| b1 | `set_deadline` as non-host / non-member | **pass** | `not_host` / `game_not_found` |
+| b2–b5 | + 5 min; null; + 90 min; a second change | **pass** | `invalid_deadline` / `invalid_deadline` / 200 / 200 |
+| b6–b7 | after start (host / non-host) | **pass** | `game_not_in_lobby` / `not_host` |
+| c1 | `extend_deadline` in the lobby (host / non-host) | **pass** | `game_not_active` / `not_host` |
+| c2 | live, non-host / non-member | **pass** | `not_host` / `game_not_found` |
+| c3–c5 | + 1 d + 1 min; + 1 d + 1 ms; = current; earlier; null | **pass** | `invalid_deadline` each; `deadline_extended_at` still null afterwards |
+| c6 | exactly + 1 day | **pass** | 200; `deadline_extended_at` set; `expires_at` unchanged (`v11-probe2`: same value before and after; the probe-log "BAD c6b" only reflects my own time travel moving `created_at`) |
+| c7 | second extension (valid and invalid value) | **pass** | `already_extended` both (`already_extended` is checked before the value) |
+| c8 | extension when the current deadline already passed (psql) | **pass** | `game_not_active` |
+| r1 | 6 parallel host extensions over separate connections | **pass** | exactly 1 × 200; 5 × `already_extended`; final deadline = the winner's |
+| d1–d3 | `start_game` with a passed deadline: nobody ready / non-host / everyone ready | **pass** | `deadline_passed` / `not_host` / `deadline_passed`. Order: `not_host` → `game_not_in_lobby` → `deadline_passed` → `players_not_ready` |
+| d4–d7 | overdue lobby: peek, late join, `set_deadline` then start | **pass** | still `lobby`; join 200; start 200 with `deadline_at` unchanged |
+| e1–e3 | active past deadline: `complete_square` / `increment_square` / `undo_completion` | **pass** | `game_not_active` × 3 |
+| e4 | `join_game`: newcomer / existing member | **pass** / Nit | `game_ended`; the member is renamed (P28; the probe-log "BAD e4b") |
+| e5–e6 | `peek_game` / anon `peek_game_public` | **pass** | `status: ended` |
+| e7 | `register_media` past deadline | **pass** | 200 (ended games take media before expiry) |
+| e8–e9, e13, e15 | `set_deadline` / `extend_deadline` past the deadline, after `end_game`, or on an ended game | **pass** | `game_not_in_lobby`; `game_not_active` (checked before `already_extended`; the probe-log "BAD e9 / e13" were my wrong expectations) |
+| e10–e12 | `end_game` non-host; overdue host; again | **pass** | `not_host`; `ended_at = deadline_at` exactly; unchanged on repeat |
+| e14 | `end_game` before the deadline | **pass** | `ended_at ≈ now` |
+| e16 | `auto_end_due_games` as service_role (psql) | **pass** | overdue active → `ended`, `ended_at = deadline_at`; a live game and an overdue lobby untouched; `authenticated` → `42501` |
+| f1–f4 | `play_again` on an overdue (and extended) game | **pass** | rematch `deadline_at − created_at = 1 day`, `deadline_extended_at` null, `expires_at = created_at + 30 days` |
+| g | `expires_at` vs deadline: 7-day deadline, extension, rematch | **pass** | always `created_at + 30 days`. Extension can take a game to 8 days after creation |
+| h1 | check constraints | **pass** | `deadline_at = created_at`, `< created_at` and null rejected; `deadline_extended_at` on a lobby rejected; `games_status_timestamps` without the old column (lobby / active / ended rules hold) |
+| h2 | partial index | **pass** | `games_deadline_at_active_idx … (deadline_at) WHERE status = 'active'`; the cron's lookup uses it (Index Scan) |
+| h3 | privileges | **pass** | anon executes only `public.peek_game_public` (shim's pgcrypto excluded); `create_game` (5 args), `set_deadline`, `extend_deadline` granted to `authenticated` only, `security definer`, search_path pinned; private helpers no grants; `auto_end_due_games` service_role only |
+| h4 | no function still references the dropped column | **pass** | `pg_proc.prosrc ilike '%auto_end_at%'` → 0 rows; no policy mentions it |
+| i | `grep -rn auto_end_at src e2e supabase/tests` | **pass** | only `src/lib/game/activeGame.ts:161,163,169` (the documented legacy-record mapping) |
+| tz | session `TimeZone` via `Prefer: timezone=` | **Minor** | P22 |
+| x | old lobby near expiry | Nit | P29 |
+
+### 11.4 Time-zone table
+
+`computePreset` from `src/lib/deadline/presets.ts`, run in Node for 146 "now" instants × 3 presets (438 results). Every result was checked for:
+- within now + 10 min … now + 7 days;
+- landing on the intended wall clock, read back with `Intl.DateTimeFormat` in that zone: Tonight 03:00 within 25 h; 24 hours exactly + 24 h; Weekend Sunday 23:59, or the 7-day clamp.
+
+**0 failures.** The full matrix is in `v11-tz-table.md`.
+
+| Zone | Wed 00:30 | Wed 02:55 | Wed 03:00 | Wed 17:00 | Wed 23:00 | Sun 23:49 | Sun 23:55 | DST nights (00:30–03:05, 17:00, 23:xx) | Result |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| America/New_York | T today 03:00 (+2.5 h) | T Thu 03:00 (+24.1 h) | T Thu 03:00 (+24 h) | T 03:00 (+10 h) | T 03:00 (+4 h) | W tonight 23:59 (+10 min) | W clamp Sun 11/15 23:55 | 03-08 and 11-01, 23 cases: T always 03:00; 24 h shifts the wall clock ±1 h (17:00→18:00 / 16:00) | 32/32 pass |
+| Europe/London | same pattern | +24.1 h | +24 h | +10 h | +4 h | +10 min | clamp | 03-29 and 10-25, incl. the second 01:30 (GMT) → T 03:00 (+1.5 h) | 32/32 pass |
+| Asia/Kolkata | +2.5 h | +24.1 h | +24 h | +10 h | +4 h | +10 min | clamp | no DST | 9/9 pass |
+| Pacific/Auckland | +2.5 h | +24.1 h | +24 h | +10 h | +4 h | +10 min | clamp | 04-05 (03:00 NZDT→02:00): first 02:30 → T 03:00 NZST (+1.5 h), second 02:30 → +0.5 h; 09-27 gap: 01:59 → next day (03:00 is 1 min away) | 32/32 pass |
+| Pacific/Kiritimati (UTC+14) | +2.5 h | +24.1 h | +24 h | +10 h | +4 h | +10 min | clamp | no DST | 9/9 pass |
+| America/St_Johns (−3:30/−2:30) | +2.5 h | +24.1 h | +24 h | +10 h | +4 h | +10 min | clamp | 03-08 and 11-01 incl. the second 01:30 NST → T 03:00 (+1.5 h) | 32/32 pass |
+
+Notes:
+- "Tonight" from 02:51 to the next evening gives tomorrow's 03:00. At 02:55 that is 24 h 5 min, and the row says "Tomorrow 3:00 AM", which is honest. On spring-forward nights, 01:51–01:59 also rolls to the next day, because 03:00 is only minutes away.
+- "24 hours" is exactly 24 elapsed hours, so across DST its wall time moves by an hour. The row shows it.
+- At exactly 03:00, Tonight and 24 hours give the same instant and `matchPreset` reads it as Tonight (6 cases). This is documented.
+- `zonedTimeToInstant`: gaps push forward (NY 03-08 02:30 → 03:30 EDT); overlaps take the first occurrence (NY 11-01 01:30 → EDT).
+- The `describeDeadline` wording was right in every case ("Tonight / Today / Tomorrow / weekday / full date").
+
+### 11.5 UI playthrough notes (own script `v11-ux.mjs`, 26/26 checks pass)
+
+Host phone: `America/New_York`, light. Friend phone: `Asia/Kolkata`, dark. Both 375×812 at DPR 2.
+
+1. **Create (default).**
+   - The picker preselects Tonight: "Tonight 3:00 AM", "Tomorrow 11:54 PM", "Sun, Nov 1, 10:54 PM" (P26 live), "Pick a time".
+   - Stored `2026-10-26T07:00:00Z` = 3:00 AM New York.
+   - The radiogroup is labelled "Game ends"; the radios are 48 px (Weekend 76 px, two lines) × 307 px (`01-create-host-ny.png`).
+2. **Lobby on both phones.**
+   - Host: "Ends tonight 3:00 AM · 3h 5m". Friend: "Ends today 12:30 PM · 3h 5m".
+   - Same instant, each phone's zone, identical time left. The friend has no Change control; the host's Change is 86×44 (`02-lobby-*.png`).
+3. **Change → This weekend.**
+   - Save → DB in 36 ms → the friend's line updated 269 ms later.
+   - Host "Ends Sun, Nov 1, 10:54 PM · 6d 23h". Friend "Ends Mon, Nov 2, 9:24 AM · 6d 23h".
+4. **Passed (psql).**
+   - Both lines read "Passed" (red, `rgb(180,35,24)`) within 1.6 s. Start is disabled.
+   - Host copy: "Pick a new deadline first". Friend copy: "Waiting for Hosty to set a new deadline" (`04-passed-*.png`).
+   - The Change sheet starts on Tonight. Custom 50 min → stored, shown as "Ends tonight 12:45 AM · 50m" / "Ends today 10:15 AM · 50m". Start re-enabled with Ready kept.
+5. **Board countdown.**
+   - "50m" sits right after the title (gap 0 px, vertically centred), 44×44 tap target, `aria-label="Time left: 50m. Players"`.
+   - Type: 16 px Patrick Hand against a 20 px marker / Bebas title.
+   - Under 1 h it takes the board ink; above 1 h it is muted: `#575d64` on white, `#b1ab9e` on near-black (`v11-ux2/01-topbar-muted-*.png`).
+   - **Judgement: subtle.** It reads as a quiet note after the name and does not compete with the grid in either theme (`05-board-whiteboard-host.png`, `v11-ux2/01-board-muted-scoreboard.png`). Taste note: in Dark Scoreboard the handwritten face is the only pencil glyph on the board; a condensed face would match better.
+   - No horizontal scroll at 375 or 320 at any text size (P27 for very long names).
+6. **Under a toast.** When "Friendo got Sing on stage at karaoke" covered the title, the countdown went to opacity 0 with `aria-hidden="true"` and `tabindex=-1` (`06-toast-over-title-host.png`).
+7. **"1 hour left."**
+   - Exactly once per phone, right at the start (50 min left), on both phones; stored in `bingo.deadlineToast.<id>`.
+   - 0 again after a reload on both phones. 0 after the +1 h extension (1 h 50 m left).
+   - The toast itself is a bordered box in the title slot (`05-board-scoreboard-friend.png`).
+8. **Extend +1 hour.**
+   - Host countdown in 3 ms (overlay); friend 525 ms (poll). DB +3600 s exactly.
+   - The host's Players sheet then reads "Deadline extended once", with no Extend button. The friend's sheet has no Extend or End game and reads "Ends today 11:15 AM (1h 50m)".
+   - Extend options are radios, 48 px; the radiogroup is labelled "New deadline".
+9. **Late joiner** (`Europe/London`): the countdown "1h 50m" was in the DOM 3 ms after the grid.
+10. **Instant return.**
+    - `bingo.activeGame.deadlineAt` and `snapshot.game.deadline_at` equal the extended deadline, with `deadline_extended_at` set.
+    - An offline reload drew the board with "1h 50m" in 97 ms (`09-offline-reload-friend.png`).
+11. **Auto-end.**
+    - Deadline set to now + 20 s (psql). Host, friend and late joiner were on "Night recap" 437–438 ms after the deadline.
+    - `data-status=ended`, `bingo.activeGame` cleared, `bingo.lastEnded` noted. The server row was still `active` (the cron is only the backstop).
+    - "Your games" row: "… Ended · Album until Nov 24".
+
+### 11.6 Edge probes
+
+- **(a) Extension race:** 6 parallel `extend_deadline` calls from the host over separate HTTP connections → exactly one 200, five `already_extended` (row lock). **Pass.**
+- **(b) Stale row after an extension:**
+  - **Reasoning.** Realtime delivers one games UPDATE per extension, in commit order. Polls are serialised (`running` / `queued`). A fetch that raced an applied event or RPC result is retried. So a revert needs the retries exhausted (`RACE_RETRIES = 2`) and a final attempt whose games read predates the commit.
+  - **Provoked:** yes, see P23 (slow reads plus concurrent taps; 2 of 4 runs).
+  - **Classification:** Minor. It is transient and the server stays authoritative. Its worst effect is a flicker to the recap and back when the old deadline is seconds away.
+- **(c) Picker auto-`onChange` drift:**
+  - Lobby: cannot cause a `set_deadline` (0 calls; only Save sends).
+  - Create form: does change the value silently (Tonight +24 h, Weekend to the 7-day clamp), with a 15–60 s greyed-out Create beforehand (P25).
+- **(d) Wrong phone clock (±10 min):** see P24.
+  - Countdown and toast are off by the skew. A fast phone shows the recap early (server still live). A slow phone stays on the board after the real deadline, and its taps are refused with the "already ended" notice.
+  - The presets on a skewed phone are computed from its own clock. A phone 10 min slow choosing "Tonight" at 02:49 would get `invalid_deadline` with clear copy.
+- **(e) Cron:**
+  - `src/lib/cleanup/runCleanup.ts:170` still calls `rpc("auto_end_due_games")` first.
+  - The SQL now ends `status = 'active' and deadline_at <= now()` with `ended_at = deadline_at`, via the new partial index. **Pass** (psql e16).
+- **(f) Accessibility. Pass.**
+  - Picker: `role=radiogroup` (labelled by the visible "Game ends" heading), `role=radio` + `aria-checked`, roving tabindex, arrows / Home / End, 48 px rows.
+  - Custom input: labelled, with an `aria-live` hint, `aria-invalid` when out of range.
+  - Lobby Change: 86×44, accessible name "Change when the game ends".
+  - Countdown: a 44×44 button named "Time left: … Players", hidden from assistive tech under a toast, no live region (quiet by design). Toast copy is plain text.
+  - Muted contrast, computed with the WCAG formula: 6.66:1 (light) and 8.6:1 (dark).
+- **(g) Docs.**
+  - `README.md` (nothing time-based), `DEPLOY.md` (checklist picks a deadline), `HUMAN_STEPS.md` (6 migrations), `FINAL_REPORT.md` ("The fixed 24-hour auto-end is gone…") and `TESTING.md` (§6 deadline steps, §14 auto-end) match the code.
+  - No stale "games end after 24 hours" copy in docs or UI. Remaining "24 hours" strings are the preset, the server default and the +24 h extension, all correct.
+  - One misleading troubleshooting line (P30).
+- **Extra: offline phone across a last-minute extension** (`v11-ux3` B).
+  - While offline, the friend showed the recap at the old deadline (activeGame cleared, `lastEnded` noted; it cannot know better).
+  - Back online, it returned to the board in 1.2 s, re-saved `bingo.activeGame` with the new `deadlineAt`, and `/` landed on the live board.
+  - `bingo.lastEnded` stays unconsumed but harmless. Info only.
+- **Extra: the host's own phone near the deadline.** `GameScreen.useRerenderAt` follows `result.game.deadline_at`, not `BoardScreen`'s extension overlay. A host who extends seconds before the deadline on a slow connection briefly sees the recap until the RPC answers. Info, from reading the code; not run.
+
+### 11.7 Verdict
+
+The deadline is enforced by the database:
+- bounds, host-only, lobby-only edits;
+- live-only, once-only, ≤ 1 day extension, race-safe;
+- `deadline_passed`;
+- effective status in every RPC;
+- cron backstop on a partial index;
+- album expiry from creation.
+
+The presets are correct in all six zones, including the DST nights, UTC+14 and half-hour offsets. On the board the countdown is small, muted, hidden under toasts, and never pushes the grid. Every phone reached the recap within half a second of the deadline. Nothing blocks shipping. Worth fixing:
+- make the SQL caps time-zone-proof (P22);
+- stop a stale games row from undoing an extension (P23);
+- consider a server clock offset for phones with wrong clocks (P24).
+
+The rest are nits.
+
+## Phase 11 resolution (2026-10-26)
+
+- **P22** fixed in working tree: new migration `20261026041631_deadline_hours_and_games_updated_at.sql` re-creates `private.validate_deadline` (`interval '9 minutes'` … `interval '168 hours' + interval '10 minutes'`) and `extend_deadline` (cap `interval '24 hours'`) in elapsed hours, with a comment on why (calendar days follow the session `TimeZone`, which `Prefer: timezone=` sets). SQL test (ai): under `America/New_York` across the next fall back and spring forward, `current + 24 h + 1 min` → `invalid_deadline`, `current + 24 h` → ok; `now + 169 h` → `invalid_deadline`, `now + 168 h` → ok; the same in POSIX zones with a DST change 3 days out. Run against the old function bodies, (ai) fails.
+- **P23** fixed in working tree: `games.updated_at` (not null, default `now()`, backfilled with `coalesce(ended_at, started_at, created_at)`, stamped `clock_timestamp()` by `games_set_updated_at`, the squares trigger function; no RLS or grant change), test (aj). `mergeGame` (so `applyGameChange`, `applyGame` and `mergeSnapshot`) drops a same-status row whose `updated_at` is older or equal (µs, `compareGameVersions`); status still never moves backwards; rows without a stamp fall back to the status rule. Unit tests replay the verifier's sequence (RPC result, then a stale snapshot: the extension stays; a newer row or the end still wins). New e2e step in `deadline.spec.ts` answers every host `games` read with the pre-extension row for 6 s after Save: the phone only ever shows `1d` and no Extend button. With the old merge rule the same step shows `23h 59m` and Extend again (the verifier's flicker, reproduced).
+- **P24** deferred: phones keep their clocks NTP-synced, and the server enforces the real deadline in every RPC whatever a phone shows.
+- **P25** fixed in working tree: the picker's clock wakes the moment the selected value goes under 10 minutes (`useNowUntil`, `tooSoonFromMs`), re-resolves the preset and shows one line under the rows ("Updated to the next 3 AM — the earlier time is less than 10 minutes away"; also "24 hours from now" / "the next weekend") until the next pick. The form checks validity on a clock no older than the value (a weekend clamp is valid the instant it is picked) and names any other deadline reason Create is disabled (`deadlineBlockMessage`). New e2e step: 02:49:40 New York, stepped a second at a time past 02:50, Create is always enabled or explained. With the HEAD picker and form the step fails at 02:50:09 (disabled, no message). Still open: the lobby Change sheet's Save keeps its own 15 s clock (`LobbyDeadline.tsx`, not in this change), so after a weekend clamp it can be disabled for a few seconds.
+- **P26** by design: the row shows the real resolved time; the 7-day cap is 168 hours.
+- **P27** fixed in working tree: in `TopBar` a name over 8 characters gets a floor of about 8 characters (5em marker, 4em scoreboard, never more than leaves room for the countdown's first unit), and the countdown (`white-space: nowrap`, whole units only) drops to its leading unit when there is no room for both: at 320 px "Saturday pub crawl on Main St!" with 2 players shows "Saturday…" + "23h" (whiteboard, was 5 characters) and "SATURDAY …" + "23h 43m" (scoreboard). With 4 players: scoreboard 8 characters + "23h" (was 5), whiteboard 6 + "23h" (was 4); 8 marker characters need 99 px and the slot is 116 px. No horizontal scroll at 320 or 375 px; `settings.spec.ts` green.
+- **P28** fixed in working tree: `join_game` leaves an existing member's name alone once the game is effectively ended (ended, active past its deadline, or past `expires_at`), test (ak).
+- **P29** deferred: the cron deletes the game at `expires_at` anyway.
+- **P30** fixed in working tree: TESTING.md §6 step 12 now gives the real causes ("Only the host can do that." = Phone A's sign-in changed; "can only be extended once" on a first try = already extended; the generic copy = `extend_deadline` missing from the database).
+- Gates: `npm run db:test` 37 passed, 0 failed (new (ai), (aj), (ak)); `npm run lint` clean; `npm run build` OK; `npm run test` 31 files, 483 tests passed; `npm run backend:status` 7 migrations; `npm run e2e` 27 passed, 1 skipped (analytics, needs a PostHog host).

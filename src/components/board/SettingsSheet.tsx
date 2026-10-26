@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useRef, type KeyboardEvent } from "react";
-import { autoEndLabel } from "@/components/board/PlayersSheet";
+import { useDeadlineLine } from "@/components/board/PlayersSheet";
 import type { Game } from "@/lib/game/types";
 import type { BoardTheme, Settings, SquareSize, TextSize } from "@/lib/settings/settings";
 
@@ -121,7 +121,7 @@ export function SettingsSheetBody({
   systemTheme: BoardTheme;
   onChange: (patch: Partial<Settings>) => void;
 }) {
-  const ends = autoEndLabel(game.auto_end_at);
+  const ends = useDeadlineLine(game.deadline_at);
   const themeOptions: Option<BoardTheme>[] = (["scoreboard", "whiteboard"] as const).map((value) => ({
     value,
     label: THEME_LABEL[value],
@@ -168,7 +168,7 @@ export function SettingsSheetBody({
       <p className="text-base leading-[22px] text-ink-soft">Only on this phone. Everyone else keeps their own look.</p>
       {ends ? (
         <p className="text-lg leading-7 text-ink-soft" data-testid="settings-auto-end">
-          This game ends automatically at {ends}.
+          {ends}
         </p>
       ) : null}
     </div>

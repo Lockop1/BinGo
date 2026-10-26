@@ -160,18 +160,51 @@ export function mergeMedia(held: Media[], fetched: Media[]): Media[] {
 const STATUS_RANK: Record<GameStatus, number> = { lobby: 0, active: 1, ended: 2 };
 
 /**
- * Applies a games row in place. Status only moves forward (lobby → active →
- * ended), so a row that would move it backwards is a stale read and is
- * ignored. Returns `null` when the game was deleted.
+ * Orders two versions of a games row by `updated_at` (µs precision, like
+ * `isNewerSquare`): 1 when `incoming` is newer, -1 when older, 0 for the same
+ * stamp, and `null` when either side has no usable stamp (a snapshot cached by
+ * a build from before the column, or a server without the migration).
+ */
+export function compareGameVersions(
+  incoming: Pick<Game, "updated_at">,
+  held: Pick<Game, "updated_at">,
+): -1 | 0 | 1 | null {
+  const a = typeof incoming.updated_at === "string" ? timestampMicros(incoming.updated_at) : Number.NaN;
+  const b = typeof held.updated_at === "string" ? timestampMicros(held.updated_at) : Number.NaN;
+  if (Number.isNaN(a) || Number.isNaN(b)) return null;
+  return a > b ? 1 : a < b ? -1 : 0;
+}
+
+/**
+ * Applies a games row in place (see `mergeGame`). Returns `null` when the game
+ * was deleted.
  */
 export function applyGameChange(game: Game, change: RowChange<Game>): Game | null {
   if (change.type === "DELETE") return change.old.id && change.old.id !== game.id ? game : null;
   return mergeGame(game, change.row);
 }
 
+/**
+ * Folds an incoming games row (event, resync or RPC result) into the held one.
+ *
+ * - Status only moves forward (lobby → active → ended): a row that would move
+ *   it backwards is a stale read and is dropped; one that moves it forward is
+ *   newer whatever its stamp.
+ * - Same status: `updated_at` decides. The server stamps it after the row lock
+ *   on every update, so it strictly increases per game, and a row older than
+ *   the held one is a read that predates a change already shown (e.g. a resync
+ *   that read the game before the host's extension committed). It is dropped,
+ *   as is the same stamp again (keeps the held object).
+ * - Either side without `updated_at`: the incoming row wins (the status rule
+ *   above still applies).
+ */
 export function mergeGame(current: Game, incoming: Game): Game {
   if (incoming.id !== current.id) return current;
-  if (STATUS_RANK[incoming.status] < STATUS_RANK[current.status]) return current;
+  const rank = STATUS_RANK[incoming.status] - STATUS_RANK[current.status];
+  if (rank < 0) return current;
+  if (rank > 0) return incoming;
+  const order = compareGameVersions(incoming, current);
+  if (order !== null && order <= 0) return current;
   return incoming;
 }
 
@@ -179,7 +212,8 @@ export function mergeGame(current: Game, incoming: Game): Game {
  * Folds a freshly fetched snapshot into the held one. Squares keep whichever
  * version is newer per row (an event may have landed while the fetch was in
  * flight); players are replaced wholesale (the server list is authoritative);
- * media is a union by id (`mergeMedia`); the game goes through `mergeGame`.
+ * media is a union by id (`mergeMedia`); the game goes through `mergeGame`, so
+ * a fetched games row older than the held one (by `updated_at`) is dropped.
  */
 export function mergeSnapshot(current: GameSnapshot | null, incoming: GameSnapshot): GameSnapshot {
   if (!current || current.game.id !== incoming.game.id) return incoming;

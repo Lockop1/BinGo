@@ -172,7 +172,7 @@ begin
 end
 $body$);
 
-select tests.run('p', 'an active game past auto_end_at is treated as ended before the cron runs', $body$
+select tests.run('p', 'an active game past deadline_at is treated as ended before the cron runs', $body$
 declare
   f tests.fixture;
   v_user uuid;
@@ -184,7 +184,7 @@ begin
   perform public.complete_square(f.game_id, 0);
 
   perform tests.logout();
-  update public.games set auto_end_at = now() - interval '1 minute' where id = f.game_id;
+  perform tests.pass_deadline(f.game_id);
 
   perform tests.login(f.users[2]);
   perform tests.throws(format('select public.complete_square(%L, 1)', f.game_id), 'game_not_active', 'complete when overdue');
@@ -204,7 +204,7 @@ begin
   perform tests.login(f.users[1]);
   v_game := public.end_game(f.game_id);
   perform tests.is(v_game.status, 'ended'::public.game_status, 'host can finalize');
-  perform tests.is(v_game.ended_at, v_game.auto_end_at, 'ended_at = auto_end_at');
+  perform tests.is(v_game.ended_at, v_game.deadline_at, 'ended_at = deadline_at');
 end
 $body$);
 

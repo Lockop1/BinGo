@@ -15,7 +15,7 @@ export const LAB_GAME: Game = {
   created_at: AT,
   started_at: AT,
   ended_at: "2026-10-18T04:00:00.000Z",
-  auto_end_at: "2026-10-18T20:00:00.000Z",
+  deadline_at: "2026-10-18T20:00:00.000Z",
   expires_at: "2026-11-16T20:00:00.000Z",
 };
 

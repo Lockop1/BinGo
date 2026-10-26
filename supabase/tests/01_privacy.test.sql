@@ -180,12 +180,13 @@ begin
       and not exists (select 1 from pg_depend d where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
     except
     select unnest(array[
-      'create_game(text,text,boolean,jsonb)', 'join_game(text,text)', 'peek_game(text)',
+      'create_game(text,text,boolean,jsonb,timestamp with time zone)', 'join_game(text,text)', 'peek_game(text)',
       'set_ready(uuid,boolean)', 'update_square(uuid,integer,text,text,integer)',
       'set_free_center(uuid,boolean)', 'start_game(uuid)', 'complete_square(uuid,integer)',
       'increment_square(uuid,integer,uuid)', 'undo_completion(uuid,integer)', 'end_game(uuid)',
       'register_media(uuid,integer,text,text)', 'leave_game(uuid)', 'remove_player(uuid,uuid)',
       'peek_game_public(text)', 'play_again(uuid)',
+      'set_deadline(uuid,timestamp with time zone)', 'extend_deadline(uuid,timestamp with time zone)',
       'is_game_member(uuid)', 'is_game_host(uuid)',
       'safe_uuid(text)', 'can_upload_game_media(uuid)'
     ])
@@ -213,7 +214,7 @@ begin
         or has_function_privilege('service_role', v_fn.oid, 'EXECUTE'),
       false, 'no API role executes ' || v_fn.sig);
   end loop;
-  perform tests.ok((select count(*) from pg_proc where pronamespace = 'private'::regnamespace) = 4, 'four private helpers');
+  perform tests.ok((select count(*) from pg_proc where pronamespace = 'private'::regnamespace) = 5, 'five private helpers');
 
   -- And actually calling every RPC as anon is refused, except the public peek.
   perform tests.login_anon();
@@ -234,6 +235,9 @@ begin
     $q$select public.leave_game(gen_random_uuid())$q$,
     $q$select public.remove_player(gen_random_uuid(), gen_random_uuid())$q$,
     $q$select public.play_again(gen_random_uuid())$q$,
+    $q$select public.set_deadline(gen_random_uuid(), now() + interval '1 hour')$q$,
+    $q$select public.extend_deadline(gen_random_uuid(), now() + interval '1 hour')$q$,
+    $q$select public.create_game('x', 'y', true, '[]'::jsonb, now() + interval '1 hour')$q$,
     $q$select public.auto_end_due_games()$q$,
     $q$select public.is_game_member(gen_random_uuid())$q$,
     $q$select public.is_game_host(gen_random_uuid())$q$,
@@ -275,7 +279,9 @@ begin
       'select public.increment_square(%L, 1, gen_random_uuid())',
       'select public.leave_game(%L)',
       'select public.remove_player(%L, gen_random_uuid())',
-      'select public.play_again(%L)'
+      'select public.play_again(%L)',
+      'select public.set_deadline(%L, now() + interval ''1 hour'')',
+      'select public.extend_deadline(%L, now() + interval ''25 hours'')'
     ] loop
       perform tests.throws(format(v_stmt, v_target), 'game_not_found', format(v_stmt, v_target));
     end loop;
@@ -313,7 +319,10 @@ begin
     $q$select public.increment_square(gen_random_uuid(), 0, gen_random_uuid())$q$,
     $q$select public.leave_game(gen_random_uuid())$q$,
     $q$select public.remove_player(gen_random_uuid(), gen_random_uuid())$q$,
-    $q$select public.play_again(gen_random_uuid())$q$
+    $q$select public.play_again(gen_random_uuid())$q$,
+    $q$select public.create_game('x', 'y', true, '[]'::jsonb, now() + interval '1 hour')$q$,
+    $q$select public.set_deadline(gen_random_uuid(), now() + interval '1 hour')$q$,
+    $q$select public.extend_deadline(gen_random_uuid(), now() + interval '1 hour')$q$
   ] loop
     perform tests.throws(v_stmt, 'not_authenticated', v_stmt);
   end loop;
@@ -395,7 +404,7 @@ begin
     and p.proname in ('create_game', 'join_game', 'peek_game', 'set_ready', 'update_square',
       'set_free_center', 'start_game', 'complete_square', 'increment_square', 'undo_completion',
       'end_game', 'register_media', 'leave_game', 'remove_player', 'auto_end_due_games',
-      'peek_game_public', 'play_again',
+      'peek_game_public', 'play_again', 'set_deadline', 'extend_deadline',
       'is_game_member', 'is_game_host', 'can_upload_game_media')
     and not p.prosecdef;
   perform tests.is(v_bad, null, 'RPCs and membership helpers are SECURITY DEFINER');

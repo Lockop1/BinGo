@@ -24,7 +24,7 @@ const countedRematches = new Set<string>();
 async function readRematch(id: string): Promise<{ hostUserId: string; status: GameStatus } | null> {
   const { data, error } = await createClient()
     .from("games")
-    .select("host_user_id, status, auto_end_at")
+    .select("host_user_id, status, deadline_at")
     .eq("id", id)
     .maybeSingle();
   if (error) throw error;

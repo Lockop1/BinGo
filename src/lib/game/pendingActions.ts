@@ -172,7 +172,7 @@ export function isDefinitiveError(code: GameErrorCode): boolean {
   return !TRANSIENT.has(code);
 }
 
-/** The game no longer takes completions (ended, past its 24 h, deleted, or not ours): nothing queued for it can land. */
+/** The game no longer takes completions (ended, past its deadline, deleted, or not ours): nothing queued for it can land. */
 const GAME_OVER = new Set<GameErrorCode>(["game_not_active", "game_not_found"]);
 
 export function isGameOverError(code: GameErrorCode): boolean {

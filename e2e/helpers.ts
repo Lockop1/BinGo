@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "@playwright/test";
@@ -27,6 +28,8 @@ export type TwoPhoneOptions = {
   /** Shown in the game name (`E2E <prefix> <random>`). */
   prefix?: string;
   pack?: Pack;
+  /** A deadline preset to pick on the create form (default: leave Tonight, the form's default). */
+  deadline?: "tonight" | "day" | "weekend";
   host?: BrowserContextOptions;
   friend?: BrowserContextOptions;
   /** Runs on each context before its first page opens (e.g. addInitScript). */
@@ -54,6 +57,10 @@ export async function twoPhonesInLobby(browser: Browser, options: TwoPhoneOption
     await expect(create).toBeEnabled({ timeout: 1_000 });
   }).toPass();
   await host.getByTestId(`pack-${options.pack ?? "night-out"}`).click();
+  if (options.deadline) {
+    await host.getByTestId(`deadline-option-${options.deadline}`).click();
+    await expect(host.getByTestId("deadline-picker")).toHaveAttribute("data-selected", options.deadline);
+  }
   await create.click();
   await expect(host).toHaveURL(/\/game\/[0-9a-f-]{36}$/);
   const gameId = new URL(host.url()).pathname.split("/").pop()!;
@@ -218,4 +225,50 @@ export async function selectAs<T>(context: BrowserContext, path: string): Promis
   });
   expect(res.ok(), `${path}: ${res.status()} ${await res.text()}`).toBe(true);
   return (await res.json()) as T[];
+}
+
+/** Calls an RPC as the given phone and returns the raw answer (for expected errors: `body.message` is the code). */
+export async function rpcRawAs(
+  context: BrowserContext,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ status: number; body: { code?: string; message?: string } & Record<string, unknown> }> {
+  const env = publicSupabaseEnv();
+  if (!env) throw new Error("NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+  const token = await accessToken(context);
+  const res = await context.request.post(`${env.url}/rest/v1/rpc/${name}`, {
+    headers: { apikey: env.anonKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    data: args,
+  });
+  return { status: res.status(), body: (await res.json()) as { code?: string; message?: string } };
+}
+
+/** The local backend's database (`npm run backend:status`); override with BINGO_LOCAL_DB_URL. */
+const LOCAL_DB_URL = process.env.BINGO_LOCAL_DB_URL ?? "postgresql://postgres@127.0.0.1:54329/bingo_local";
+
+/**
+ * Time travel for the deadline specs: sets a game's `deadline_at` straight in
+ * the local database (as postgres), for the "passed" / "about to pass" cases
+ * the RPCs refuse. `created_at` / `started_at` move back when needed so the
+ * table's checks (deadline after creation) still hold. Local backend only.
+ */
+export function setDeadlineViaDb(gameId: string, iso: string): void {
+  if (!/^[0-9a-f-]{36}$/.test(gameId)) throw new Error(`bad game id ${gameId}`);
+  if (Number.isNaN(Date.parse(iso))) throw new Error(`bad deadline ${iso}`);
+  const sql = `
+    update public.games g
+    set created_at = case when g.created_at >= :'at'::timestamptz then :'at'::timestamptz - interval '1 hour' else g.created_at end,
+        started_at = case
+          when g.started_at is not null and g.started_at >= :'at'::timestamptz then :'at'::timestamptz - interval '1 hour'
+          else g.started_at
+        end,
+        deadline_at = :'at'::timestamptz
+    where g.id = :'id'::uuid
+    returning g.id;
+  `;
+  const out = execSync(`psql "${LOCAL_DB_URL}" -X -q -At -v ON_ERROR_STOP=1 -v id=${gameId} -v at=${iso}`, {
+    input: sql,
+    encoding: "utf8",
+  });
+  expect(out.trim(), `setDeadlineViaDb(${gameId})`).toBe(gameId);
 }

@@ -2,7 +2,7 @@
 
 import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { BoardScreen } from "@/components/board/BoardScreen";
+import { BoardScreen, endedProps } from "@/components/board/BoardScreen";
 import { StartTransition, type StartSquare } from "@/components/game/StartTransition";
 import { NotFound } from "@/components/join/JoinScreen";
 import { Lobby } from "@/components/lobby/Lobby";
@@ -15,6 +15,7 @@ import { Recap } from "@/components/recap/Recap";
 import { RecapViewedTracker } from "@/components/providers/RecapViewedTracker";
 import { PencilButton, PencilLink, pencilButtonClass } from "@/components/ui/PencilButton";
 import { SkeletonLines } from "@/components/ui/Skeleton";
+import { track } from "@/lib/analytics";
 import {
   SAVE_DEBOUNCE_MS,
   clearActiveGame,
@@ -38,7 +39,7 @@ import { useSettings } from "@/lib/settings/useSettings";
  * /game/[id]: the paper lobby, then the live board, then the recap.
  * Data and live sync live in useGame; the screen follows the game's
  * effective status, so a start or end seen via Realtime, a resync, the
- * host's own RPC result or the clock passing `auto_end_at` all switch screens.
+ * host's own RPC result or the clock passing `deadline_at` all switch screens.
  *
  * The lobby, loading and ended states sit on paper; the live board owns the
  * whole viewport (its own background and safe-area padding), so this
@@ -103,7 +104,7 @@ function Paper({ children }: { children: ReactNode }) {
 /** What the start transition draws: the lobby board as it was when the start landed. */
 type StartShow = { key: number; name: string; squares: StartSquare[]; freeCenter: boolean };
 
-/** setTimeout's ceiling (~24.8 days); auto_end_at is at most 24 h away anyway. */
+/** setTimeout's ceiling (~24.8 days); deadline_at is at most ~8 days away (7 days + one extension of a day). */
 const MAX_TIMER_MS = 2_147_000_000;
 
 /** Re-renders once `at` passes, so the effective status flips to ended on time. */
@@ -222,6 +223,29 @@ function useActiveGameRecord(
   }, [gameId, notFound, status, confirmed]);
 }
 
+/**
+ * `game_ended` with `by: "auto"`, sent once from the host's phone only, when
+ * this screen sees the deadline flip a live game to ended (the server row still
+ * says `active`: the clock did it, not `end_game`, which the board tracks
+ * itself as `by: "host"`). Same counts as the host-ended path.
+ */
+function useAutoEndAnalytics(result: UseGameResult, status: GameStatus | null) {
+  const before = useRef<GameStatus | null>(null);
+  const sent = useRef(false);
+  const game = result.status === "ready" ? result.game : null;
+  const squares = result.status === "ready" ? result.squares : null;
+  const playerCount = result.status === "ready" ? result.players.length : 0;
+  const isHost = game !== null && result.me !== null && result.me.user_id === game.host_user_id;
+  useEffect(() => {
+    const previous = before.current;
+    before.current = status;
+    if (sent.current || !game || !squares || !isHost) return;
+    if (previous !== "active" || status !== "ended" || game.status !== "active") return;
+    sent.current = true;
+    track("game_ended", endedProps(squares, playerCount, game, "auto"));
+  }, [status, game, squares, playerCount, isHost]);
+}
+
 function squareLabel(squares: readonly Square[], position: number): string {
   const label = squares.find((s) => s.position === position)?.label.trim();
   return label || `square ${position + 1}`;
@@ -337,8 +361,9 @@ function GameView({
   // Sends taps restored from storage whatever this screen shows, and reports any it had to drop.
   const queue = usePendingQueue(gameId);
 
-  // An active game moves to the recap the moment auto_end_at passes.
-  useRerenderAt(result.status === "ready" ? result.game.auto_end_at : null);
+  // An active game moves to the recap the moment deadline_at passes (an
+  // extension arriving via Realtime / resync re-arms the timer).
+  useRerenderAt(result.status === "ready" ? result.game.deadline_at : null);
 
   // Effective status as last rendered on this mount (null until the game has
   // loaded), so only a flip seen live starts the transition: a lobby that was
@@ -382,6 +407,7 @@ function GameView({
     (result.status === "ready" && result.confirmed && sessionReady && wasMember && result.me === null);
 
   useActiveGameRecord(gameId, result, liveStatus, cached, userId, removed);
+  useAutoEndAnalytics(result, liveStatus);
 
   const notice = (
     <DroppedNotice

@@ -4,6 +4,8 @@ import {
   ACTIVE_GAME_KEY,
   HOME_GUARD_SCRIPT,
   LAST_ENDED_KEY,
+  LEGACY_GAME_END_KEY,
+  LEGACY_RECORD_END_KEY,
   LAST_ENDED_MAX_AGE_MS,
   LOBBY_RECORD_MAX_AGE_MS,
   STAY_HOME_KEY,
@@ -50,7 +52,7 @@ function game(overrides: Partial<Game> = {}): Game {
     created_at: iso(NOW - 2 * HOUR),
     started_at: iso(NOW - HOUR),
     ended_at: null,
-    auto_end_at: iso(NOW + 23 * HOUR),
+    deadline_at: iso(NOW + 23 * HOUR),
     expires_at: iso(NOW + 30 * 24 * HOUR),
     ...overrides,
   };
@@ -154,18 +156,27 @@ describe("record shape", () => {
       joinCode: "ABCD2345",
       name: "Friday night",
       status: "active",
-      autoEndAt: iso(NOW + 23 * HOUR),
+      deadlineAt: iso(NOW + 23 * HOUR),
       expiresAt: iso(NOW + 30 * 24 * HOUR),
       savedAt: iso(NOW),
       userId: "user-me",
     });
     expect(r.snapshot.squares).toHaveLength(25);
-    expect(record({ status: "lobby", started_at: null, auto_end_at: null }).status).toBe("lobby");
+    const lobby = record({ status: "lobby", started_at: null, deadline_at: iso(NOW + 5 * HOUR) });
+    expect(lobby.status).toBe("lobby");
+    expect(lobby.deadlineAt).toBe(iso(NOW + 5 * HOUR));
   });
 
-  it("never builds a record for an ended game, including one past auto_end_at", () => {
+  it("never builds a record for an ended game, including one past its deadline", () => {
     expect(toActiveGameRecord(snapshot({ status: "ended", ended_at: iso(NOW) }), "user-me", new Date(NOW))).toBeNull();
-    expect(toActiveGameRecord(snapshot({ auto_end_at: iso(NOW - 1) }), "user-me", new Date(NOW))).toBeNull();
+    expect(toActiveGameRecord(snapshot({ deadline_at: iso(NOW - 1) }), "user-me", new Date(NOW))).toBeNull();
+  });
+
+  it("keeps an extended deadline (deadline_extended_at) in the snapshot", () => {
+    const r = record({ deadline_at: iso(NOW + 40 * HOUR), deadline_extended_at: iso(NOW - HOUR) });
+    expect(r.deadlineAt).toBe(iso(NOW + 40 * HOUR));
+    expect(parseActiveGame(JSON.parse(JSON.stringify(r)))).toEqual(r);
+    expect(parseActiveGame(JSON.parse(JSON.stringify(record({ deadline_extended_at: 7 as unknown as string }))))).toBeNull();
   });
 
   it("round-trips through JSON and validates every row", () => {
@@ -193,6 +204,70 @@ describe("record shape", () => {
     expect(tamper((x) => ((x.snapshot as GameSnapshot).players[0].game_id = "another-game"))).toBeNull();
     expect(tamper((x) => ((x.snapshot as GameSnapshot).media = "none" as unknown as Media[]))).toBeNull();
     expect(tamper((x) => ((x.snapshot as { game: unknown }).game = null))).toBeNull();
+    expect(tamper((x) => delete x.deadlineAt)).toBeNull();
+    expect(tamper((x) => delete (x.snapshot as { game: Record<string, unknown> }).game.deadline_at)).toBeNull();
+  });
+
+  describe("records saved before the host-set deadline", () => {
+    /** The shape older builds wrote: the fixed end on the record and the game row, no deadline_at. */
+    function legacy(overrides: Partial<Game> = {}, end: string | null = iso(NOW + 23 * HOUR)): Record<string, unknown> {
+      const copy = JSON.parse(JSON.stringify(record(overrides))) as Record<string, unknown>;
+      const game = (copy.snapshot as { game: Record<string, unknown> }).game;
+      delete copy.deadlineAt;
+      delete game.deadline_at;
+      copy[LEGACY_RECORD_END_KEY] = end;
+      game[LEGACY_GAME_END_KEY] = end;
+      return copy;
+    }
+
+    it("an active game keeps its old end as the deadline", () => {
+      const parsed = parseActiveGame(legacy());
+      expect(parsed).not.toBeNull();
+      expect(parsed!.deadlineAt).toBe(iso(NOW + 23 * HOUR));
+      expect(parsed!.snapshot.game.deadline_at).toBe(iso(NOW + 23 * HOUR));
+      expect(parsed).not.toHaveProperty(LEGACY_RECORD_END_KEY);
+      expect(parsed!.snapshot.game).not.toHaveProperty(LEGACY_GAME_END_KEY);
+      // Mapped to exactly what a current build would have saved.
+      expect(parsed).toEqual(record());
+      expect(isReturnable(parsed!, NOW + 23 * HOUR - 1)).toBe(true);
+      expect(isReturnable(parsed!, NOW + 23 * HOUR)).toBe(false);
+    });
+
+    it("a lobby (no end yet) gets created_at + 24 h, as the migration gave it", () => {
+      const parsed = parseActiveGame(legacy({ status: "lobby", started_at: null }, null));
+      expect(parsed?.status).toBe("lobby");
+      expect(parsed?.deadlineAt).toBe(iso(NOW - 2 * HOUR + 24 * HOUR));
+      expect(parsed?.snapshot.game.deadline_at).toBe(iso(NOW - 2 * HOUR + 24 * HOUR));
+    });
+
+    it("an active game whose old end already passed is not returned to", () => {
+      const parsed = parseActiveGame(legacy({}, iso(NOW - 1)));
+      expect(parsed).not.toBeNull();
+      expect(isReturnable(parsed!, NOW)).toBe(false);
+      expect(decideOpen({ active: parsed, lastEnded: null, freshOpen: true, stay: false, now: NOW })).toEqual({
+        kind: "home",
+        back: null,
+      });
+    });
+
+    it("still rejects junk in the old shape", () => {
+      // No end, and nothing to count 24 hours from: not upgraded, so not accepted.
+      const bad = legacy({ started_at: null }, null);
+      (bad.snapshot as { game: Record<string, unknown> }).game.created_at = "whenever";
+      expect(parseActiveGame(bad)).toBeNull();
+      expect(parseActiveGame({ ...legacy(), [LEGACY_RECORD_END_KEY]: 42, snapshot: null })).toBeNull();
+    });
+
+    it("reads back from storage through readActiveGame", () => {
+      stubBrowser();
+      try {
+        local.setItem(ACTIVE_GAME_KEY, JSON.stringify(legacy()));
+        expect(readActiveGame()?.deadlineAt).toBe(iso(NOW + 23 * HOUR));
+        expect(readActiveGameFor(GAME_ID)?.snapshot.game.deadline_at).toBe(iso(NOW + 23 * HOUR));
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 
   it("parses lastEnded strictly", () => {
@@ -203,7 +278,7 @@ describe("record shape", () => {
 });
 
 describe("rules", () => {
-  it("an active record is returnable until auto_end_at and the 30-day expiry", () => {
+  it("an active record is returnable until its deadline and the 30-day expiry", () => {
     const r = record();
     expect(isReturnable(r, NOW)).toBe(true);
     expect(isReturnable(r, NOW + 23 * HOUR - 1)).toBe(true);
@@ -212,7 +287,7 @@ describe("rules", () => {
   });
 
   it("a lobby record is returnable for a day after it was last saved", () => {
-    const lobby = record({ status: "lobby", started_at: null, auto_end_at: null });
+    const lobby = record({ status: "lobby", started_at: null });
     expect(isReturnable(lobby, NOW + LOBBY_RECORD_MAX_AGE_MS - 1)).toBe(true);
     expect(isReturnable(lobby, NOW + LOBBY_RECORD_MAX_AGE_MS)).toBe(false);
   });
@@ -233,13 +308,13 @@ describe("rules", () => {
     });
 
     it("a lobby, a deliberate Home visit or in-app navigation shows home with the Back row", () => {
-      const lobby = record({ status: "lobby", started_at: null, auto_end_at: null });
+      const lobby = record({ status: "lobby", started_at: null });
       expect(open({ active: lobby })).toEqual({ kind: "home", back: lobby });
       expect(open({ active: record(), stay: true })).toEqual({ kind: "home", back: record() });
       expect(open({ active: record(), freshOpen: false })).toEqual({ kind: "home", back: record() });
     });
 
-    it("a record past auto_end_at neither jumps nor offers the row", () => {
+    it("a record past its deadline neither jumps nor offers the row", () => {
       expect(open({ active: record(), now: NOW + 24 * HOUR })).toEqual({ kind: "home", back: null });
     });
 

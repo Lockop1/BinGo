@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { FreeSpaceInfo } from "@/components/lobby/FreeSpaceInfo";
 import { InviteBlock } from "@/components/lobby/InviteBlock";
 import { LobbyBoard, type BoardSquare } from "@/components/lobby/LobbyBoard";
+import { LobbyDeadline } from "@/components/lobby/LobbyDeadline";
 import { LobbyDock } from "@/components/lobby/LobbyDock";
 import { LobbyHeader } from "@/components/lobby/LobbyHeader";
 import { PlayerList } from "@/components/lobby/PlayerList";
@@ -13,7 +14,8 @@ import { Sheet } from "@/components/ui/Sheet";
 import { Toggle } from "@/components/ui/Toggle";
 import { track } from "@/lib/analytics";
 import { errorCopy, toGameError } from "@/lib/game/errors";
-import { removePlayer, setFreeCenter, setReady, startGame, updateSquare } from "@/lib/game/rpc";
+import { removePlayer, setDeadline, setFreeCenter, setReady, startGame, updateSquare } from "@/lib/game/rpc";
+import { useCountdown } from "@/lib/deadline/useNow";
 import { BOARD_SIZE, CENTER_POSITION, type Game, type Player, type Square } from "@/lib/game/types";
 import type { SyncState } from "@/lib/game/useGame";
 
@@ -71,6 +73,8 @@ export function Lobby({
   const [startBusy, setStartBusy] = useState(false);
   const [dockError, setDockError] = useState<string | null>(null);
   const [freeError, setFreeError] = useState<string | null>(null);
+  const [deadlineOverlay, setDeadlineOverlay] = useState<Overlay<string> | null>(null);
+  const [deadlineError, setDeadlineError] = useState<string | null>(null);
   const editingRef = useRef<Editing | null>(null);
   const readySeq = useRef(0);
   const labelRef = useRef<HTMLInputElement>(null);
@@ -81,6 +85,10 @@ export function Lobby({
   };
 
   const freeCenter = freeOverlay?.value ?? game.free_center;
+  const deadlineIso = deadlineOverlay?.value ?? game.deadline_at;
+  // Ticks when the countdown label changes (at the deadline itself in the last minute), so
+  // "Passed" and the Start lock appear on time. Null until mounted: never "passed" on the server.
+  const deadlinePassed = useCountdown(deadlineIso).countdown?.tier === "passed";
   const myReady = readyOverlay?.value ?? me?.is_ready ?? false;
   const readyCount = players.filter((p) => (p.id === me?.id ? myReady : p.is_ready)).length;
   // Start uses server-confirmed state only (an in-flight Ready or removal has not landed yet;
@@ -135,6 +143,20 @@ export function Lobby({
       setFreeError(failed(error));
     } finally {
       setFreeOverlay((o) => (o?.seq === id ? null : o));
+    }
+  };
+
+  // Host only (set_deadline is host-only in SQL): shown at once, then the returned row is adopted.
+  const saveDeadline = async (iso: string) => {
+    const id = ++seq.current;
+    setDeadlineOverlay({ value: iso, seq: id });
+    setDeadlineError(null);
+    try {
+      applyGame(await setDeadline(game.id, iso));
+    } catch (error) {
+      setDeadlineError(failed(error));
+    } finally {
+      setDeadlineOverlay((o) => (o?.seq === id ? null : o));
     }
   };
 
@@ -225,6 +247,15 @@ export function Lobby({
         syncState={syncState}
         onResync={() => void refresh()}
         applyGame={applyGame}
+        deadline={
+          <LobbyDeadline
+            deadlineIso={deadlineIso}
+            isHost={isHost}
+            pending={deadlineOverlay !== null}
+            error={deadlineError}
+            onSave={(iso) => void saveDeadline(iso)}
+          />
+        }
       />
       <InviteBlock code={game.join_code} gameName={game.name} />
       <PlayerList
@@ -267,6 +298,8 @@ export function Lobby({
         isHost={isHost}
         hostName={hostName}
         allReady={allReady}
+        deadlinePassed={deadlinePassed}
+        deadlinePending={deadlineOverlay !== null}
         readyCount={readyCount}
         playerCount={players.length}
         startBusy={startBusy}

@@ -257,7 +257,7 @@ describe("hydration from the cached snapshot", () => {
     created_at: stamp(1),
     started_at: stamp(1),
     ended_at: null,
-    auto_end_at: "2026-10-24T21:00:00.000Z",
+    deadline_at: "2026-10-24T21:00:00.000Z",
     expires_at: "2026-11-22T21:00:00.000Z",
   };
   const snapshotOf = (squares: Square[]) => ({ game, players: [], squares, media: [] });

@@ -9,7 +9,7 @@ import type { prepareMedia } from "@/lib/media/prepare";
 import type { UploadQueue } from "@/lib/media/uploadQueue";
 
 type Props = {
-  game: Pick<Game, "id" | "name" | "join_code" | "status" | "auto_end_at" | "expires_at">;
+  game: Pick<Game, "id" | "name" | "join_code" | "status" | "deadline_at" | "expires_at">;
   square: Pick<Square, "position" | "label" | "completed_at" | "completed_by_player_id">;
   me: Pick<Player, "id"> | null;
   players: readonly Player[];
