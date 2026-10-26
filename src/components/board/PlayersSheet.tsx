@@ -7,13 +7,13 @@ import type { DisplaySquare } from "@/lib/game/boardState";
 import { MAX_PLAYERS, type Game, type Player } from "@/lib/game/types";
 import type { PaletteTheme } from "@/lib/palette";
 
-const autoEndFormat = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+const deadlineFormat = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 
-/** "Sat 9:41 PM" in the viewer's locale and time zone. */
-export function autoEndLabel(autoEndAt: string | null): string | null {
-  if (!autoEndAt) return null;
-  const date = new Date(autoEndAt);
-  return Number.isNaN(date.getTime()) ? null : autoEndFormat.format(date);
+/** The game's deadline as "Sat 9:41 PM" in the viewer's locale and time zone. */
+export function deadlineLabel(deadlineAt: string | null): string | null {
+  if (!deadlineAt) return null;
+  const date = new Date(deadlineAt);
+  return Number.isNaN(date.getTime()) ? null : deadlineFormat.format(date);
 }
 
 function Tag({ children }: { children: string }) {
@@ -49,7 +49,7 @@ export function PlayersSheetBody({
     const by = square.completed_by_player_id;
     if (by && square.completed_at) counts.set(by, (counts.get(by) ?? 0) + 1);
   }
-  const ends = autoEndLabel(game.auto_end_at);
+  const ends = deadlineLabel(game.deadline_at);
 
   return (
     <div className="flex min-w-0 flex-col gap-[14px] pb-2" data-testid="players-sheet-body">

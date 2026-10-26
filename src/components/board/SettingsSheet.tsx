@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useRef, type KeyboardEvent } from "react";
-import { autoEndLabel } from "@/components/board/PlayersSheet";
+import { deadlineLabel } from "@/components/board/PlayersSheet";
 import type { Game } from "@/lib/game/types";
 import type { BoardTheme, Settings, SquareSize, TextSize } from "@/lib/settings/settings";
 
@@ -121,7 +121,7 @@ export function SettingsSheetBody({
   systemTheme: BoardTheme;
   onChange: (patch: Partial<Settings>) => void;
 }) {
-  const ends = autoEndLabel(game.auto_end_at);
+  const ends = deadlineLabel(game.deadline_at);
   const themeOptions: Option<BoardTheme>[] = (["scoreboard", "whiteboard"] as const).map((value) => ({
     value,
     label: THEME_LABEL[value],

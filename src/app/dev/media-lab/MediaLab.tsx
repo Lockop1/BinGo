@@ -113,7 +113,7 @@ const labQueue = createUploadQueue({
 const LIVE_GAME: Game = {
   ...LAB_GAME,
   status: "active",
-  auto_end_at: "2099-01-01T00:00:00.000Z",
+  deadline_at: "2099-01-01T00:00:00.000Z",
   expires_at: "2099-02-01T00:00:00.000Z",
 };
 

@@ -227,3 +227,21 @@ begin
   perform tests.logout();
 end;
 $$;
+
+-- Time travel past a game's deadline (call as postgres: logout first). now() is
+-- fixed for the whole test transaction, so instead of waiting the game's
+-- timestamps move back: deadline_at = now() - ago, and created_at / started_at
+-- (when set) at least an hour before that, so games_deadline_after_created
+-- still holds. Bypasses the RPC validation on purpose. Returns the deadline.
+create function tests.pass_deadline(game_id uuid, ago interval default interval '1 minute') returns timestamptz
+language sql as $$
+  update public.games g
+  set created_at = least(g.created_at, now() - pass_deadline.ago - interval '1 hour'),
+      started_at = case
+        when g.started_at is null then null
+        else least(g.started_at, now() - pass_deadline.ago - interval '1 hour')
+      end,
+      deadline_at = now() - pass_deadline.ago
+  where g.id = pass_deadline.game_id
+  returning g.deadline_at;
+$$;

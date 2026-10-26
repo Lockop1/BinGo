@@ -11,8 +11,9 @@ export type Database = {
     Tables: {
       "games": {
         Row: {
-          "auto_end_at": string | null;
           "created_at": string;
+          "deadline_at": string;
+          "deadline_extended_at": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -27,8 +28,9 @@ export type Database = {
         };
         ComputedFields: never;
         Insert: {
-          "auto_end_at"?: string | null;
           "created_at"?: string;
+          "deadline_at": string;
+          "deadline_extended_at"?: string | null;
           "ended_at"?: string | null;
           "expires_at"?: string;
           "free_center"?: boolean;
@@ -42,8 +44,9 @@ export type Database = {
           "status"?: Database["public"]['Enums']["game_status"];
         };
         Update: {
-          "auto_end_at"?: string | null;
           "created_at"?: string;
+          "deadline_at"?: string;
+          "deadline_extended_at"?: string | null;
           "ended_at"?: string | null;
           "expires_at"?: string;
           "free_center"?: boolean;
@@ -336,14 +339,16 @@ export type Database = {
       };
       "create_game": {
         Args: {
+          "deadline_at"?: string;
           "free_center"?: boolean;
           "host_name": string;
           "name": string;
           "squares"?: Json;
         };
         Returns: {
-          "auto_end_at": string | null;
           "created_at": string;
+          "deadline_at": string;
+          "deadline_extended_at": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -368,8 +373,37 @@ export type Database = {
           "game_id": string;
         };
         Returns: {
-          "auto_end_at": string | null;
           "created_at": string;
+          "deadline_at": string;
+          "deadline_extended_at": string | null;
+          "ended_at": string | null;
+          "expires_at": string;
+          "free_center": boolean;
+          "host_user_id": string;
+          "id": string;
+          "join_code": string;
+          "name": string;
+          "next_game_id": string | null;
+          "next_join_code": string | null;
+          "started_at": string | null;
+          "status": Database["public"]['Enums']["game_status"];
+        };
+        SetofOptions: {
+          from: "*";
+          to: "games";
+          isOneToOne: true;
+          isSetofReturn: false;
+        };
+      };
+      "extend_deadline": {
+        Args: {
+          "deadline_at": string;
+          "game_id": string;
+        };
+        Returns: {
+          "created_at": string;
+          "deadline_at": string;
+          "deadline_extended_at": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -471,8 +505,9 @@ export type Database = {
           "game_id": string;
         };
         Returns: {
-          "auto_end_at": string | null;
           "created_at": string;
+          "deadline_at": string;
+          "deadline_extended_at": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -528,14 +563,43 @@ export type Database = {
         };
         Returns: string;
       };
+      "set_deadline": {
+        Args: {
+          "deadline_at": string;
+          "game_id": string;
+        };
+        Returns: {
+          "created_at": string;
+          "deadline_at": string;
+          "deadline_extended_at": string | null;
+          "ended_at": string | null;
+          "expires_at": string;
+          "free_center": boolean;
+          "host_user_id": string;
+          "id": string;
+          "join_code": string;
+          "name": string;
+          "next_game_id": string | null;
+          "next_join_code": string | null;
+          "started_at": string | null;
+          "status": Database["public"]['Enums']["game_status"];
+        };
+        SetofOptions: {
+          from: "*";
+          to: "games";
+          isOneToOne: true;
+          isSetofReturn: false;
+        };
+      };
       "set_free_center": {
         Args: {
           "enabled": boolean;
           "game_id": string;
         };
         Returns: {
-          "auto_end_at": string | null;
           "created_at": string;
+          "deadline_at": string;
+          "deadline_extended_at": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -581,8 +645,9 @@ export type Database = {
           "game_id": string;
         };
         Returns: {
-          "auto_end_at": string | null;
           "created_at": string;
+          "deadline_at": string;
+          "deadline_extended_at": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;

@@ -38,7 +38,7 @@ import { useSettings } from "@/lib/settings/useSettings";
  * /game/[id]: the paper lobby, then the live board, then the recap.
  * Data and live sync live in useGame; the screen follows the game's
  * effective status, so a start or end seen via Realtime, a resync, the
- * host's own RPC result or the clock passing `auto_end_at` all switch screens.
+ * host's own RPC result or the clock passing `deadline_at` all switch screens.
  *
  * The lobby, loading and ended states sit on paper; the live board owns the
  * whole viewport (its own background and safe-area padding), so this
@@ -103,7 +103,7 @@ function Paper({ children }: { children: ReactNode }) {
 /** What the start transition draws: the lobby board as it was when the start landed. */
 type StartShow = { key: number; name: string; squares: StartSquare[]; freeCenter: boolean };
 
-/** setTimeout's ceiling (~24.8 days); auto_end_at is at most 24 h away anyway. */
+/** setTimeout's ceiling (~24.8 days); deadline_at is at most ~8 days away (7 days + one extension of a day). */
 const MAX_TIMER_MS = 2_147_000_000;
 
 /** Re-renders once `at` passes, so the effective status flips to ended on time. */
@@ -337,8 +337,9 @@ function GameView({
   // Sends taps restored from storage whatever this screen shows, and reports any it had to drop.
   const queue = usePendingQueue(gameId);
 
-  // An active game moves to the recap the moment auto_end_at passes.
-  useRerenderAt(result.status === "ready" ? result.game.auto_end_at : null);
+  // An active game moves to the recap the moment deadline_at passes (an
+  // extension arriving via Realtime / resync re-arms the timer).
+  useRerenderAt(result.status === "ready" ? result.game.deadline_at : null);
 
   // Effective status as last rendered on this mount (null until the game has
   // loaded), so only a flip seen live starts the transition: a lobby that was

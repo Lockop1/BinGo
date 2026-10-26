@@ -59,6 +59,12 @@ export function createGame(args: {
   host_name: string;
   free_center?: boolean;
   squares?: NewSquare[];
+  /**
+   * When the game ends automatically (ISO string; the host's pick, 10 minutes
+   * to 7 days ahead, checked by the RPC). `null` = the server default, 24 hours
+   * from now.
+   */
+  deadlineAt: string | null;
 }): Promise<Game> {
   const payload: Args<"create_game"> = {
     name: args.name,
@@ -66,6 +72,7 @@ export function createGame(args: {
     free_center: args.free_center ?? true,
     squares: args.squares ?? [],
   };
+  if (args.deadlineAt !== null) payload.deadline_at = args.deadlineAt;
   return call((sb) => sb.rpc("create_game", payload));
 }
 
@@ -96,6 +103,21 @@ export function updateSquare(args: Args<"update_square">): Promise<Square> {
 
 export function setFreeCenter(args: Args<"set_free_center">): Promise<Game> {
   return call((sb) => sb.rpc("set_free_center", args));
+}
+
+/** Host only, lobby only: a new deadline (ISO string), 10 minutes to 7 days from now. */
+export function setDeadline(gameId: string, deadlineAt: string): Promise<Game> {
+  const args: Args<"set_deadline"> = { game_id: gameId, deadline_at: deadlineAt };
+  return call((sb) => sb.rpc("set_deadline", args));
+}
+
+/**
+ * Host only, live games only, once per game: moves the deadline later by at
+ * most one day (`already_extended` the second time). Resolves the updated game.
+ */
+export function extendDeadline(gameId: string, deadlineAt: string): Promise<Game> {
+  const args: Args<"extend_deadline"> = { game_id: gameId, deadline_at: deadlineAt };
+  return call((sb) => sb.rpc("extend_deadline", args));
 }
 
 export function startGame(args: Args<"start_game">): Promise<Game> {

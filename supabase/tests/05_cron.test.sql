@@ -1,6 +1,6 @@
 -- Service-role maintenance used by the cleanup cron.
 
-select tests.run('m', 'auto_end_due_games as service_role ends active games past auto_end_at and leaves others alone', $body$
+select tests.run('m', 'auto_end_due_games as service_role ends active games past deadline_at (ended_at = deadline_at) and leaves others alone', $body$
 declare
   f_due tests.fixture;
   f_active tests.fixture;
@@ -21,9 +21,10 @@ begin
 
   -- Time travel as postgres.
   perform tests.logout();
-  update public.games set auto_end_at = now() - interval '5 minutes' where id = f_due.game_id;
-  update public.games set auto_end_at = now() - interval '1 hour' where id = f_ended.game_id
-  returning ended_at into v_ended_at;
+  perform tests.pass_deadline(f_due.game_id, interval '5 minutes');
+  perform tests.pass_deadline(f_ended.game_id, interval '1 hour');
+  perform tests.pass_deadline(f_lobby.game_id, interval '1 hour');
+  select ended_at into v_ended_at from public.games where id = f_ended.game_id;
 
   -- Clients cannot run it.
   perform tests.login(f_due.users[1]);
@@ -36,9 +37,10 @@ begin
   perform tests.logout();
   select * into v_game from public.games where id = f_due.game_id;
   perform tests.is(v_game.status, 'ended'::public.game_status, 'due game ended');
-  perform tests.is(v_game.ended_at, v_game.auto_end_at, 'ended_at = auto_end_at');
+  perform tests.is(v_game.ended_at, v_game.deadline_at, 'ended_at = deadline_at');
+  perform tests.is(v_game.ended_at, now() - interval '5 minutes', 'ended at the deadline, not at the cron run');
   perform tests.is((select status from public.games where id = f_active.game_id), 'active'::public.game_status, 'future game still active');
-  perform tests.is((select status from public.games where id = f_lobby.game_id), 'lobby'::public.game_status, 'lobby untouched');
+  perform tests.is((select status from public.games where id = f_lobby.game_id), 'lobby'::public.game_status, 'lobby past its deadline untouched (start_game refuses it)');
   perform tests.is((select ended_at from public.games where id = f_ended.game_id), v_ended_at, 'ended game untouched');
 
   -- The cron's other job: service_role can delete expired games (cascade).

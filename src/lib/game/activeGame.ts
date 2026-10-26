@@ -17,8 +17,9 @@ import { readLocal, removeLocal, writeLocal } from "@/lib/storage/local";
  *   Home links), so `/` never bounces back to the game in that tab.
  *
  * Everything read back is validated: a corrupt or foreign value is ignored.
- * Nothing here is game logic; the server still decides everything once it
- * answers (its rows win over the snapshot).
+ * Records saved before the host-set deadline existed are upgraded on read
+ * (`upgradeLegacyRecord`). Nothing here is game logic; the server still
+ * decides everything once it answers (its rows win over the snapshot).
  */
 
 export const ACTIVE_GAME_KEY = "bingo.activeGame";
@@ -41,7 +42,8 @@ export type ActiveGameRecord = {
   name: string;
   /** Effective status when saved. An ended game is never saved (it clears the record). */
   status: Exclude<GameStatus, "ended">;
-  autoEndAt: string | null;
+  /** The game's `deadline_at` when saved: an active game is over once it passes. */
+  deadlineAt: string;
   expiresAt: string;
   /** ISO time of the save (this phone's clock). */
   savedAt: string;
@@ -65,6 +67,11 @@ type Check = (value: unknown) => boolean;
 
 const str: Check = (v) => typeof v === "string";
 const strOrNull: Check = (v) => v === null || typeof v === "string";
+/** A column older snapshots may not have at all. */
+const optional =
+  (check: Check): Check =>
+  (v) =>
+    v === undefined || check(v);
 const int: Check = (v) => typeof v === "number" && Number.isInteger(v);
 const bool: Check = (v) => typeof v === "boolean";
 const oneOf =
@@ -91,7 +98,8 @@ const GAME_SHAPE: Record<string, Check> = {
   created_at: str,
   started_at: strOrNull,
   ended_at: strOrNull,
-  auto_end_at: strOrNull,
+  deadline_at: str,
+  deadline_extended_at: optional(strOrNull),
   expires_at: str,
 };
 
@@ -148,15 +156,51 @@ export function isGameSnapshot(value: unknown, gameId: string): value is GameSna
   );
 }
 
-export function parseActiveGame(value: unknown): ActiveGameRecord | null {
-  if (!isRecord(value) || value.version !== ACTIVE_GAME_VERSION) return null;
+// Legacy records ---------------------------------------------------------------
+// Builds from before the host-set deadline saved the fixed 24-hour end as
+// `autoEndAt` on the record and `auto_end_at` on the snapshot's game, and had no
+// `deadline_at`. The migration that introduced the deadline gave every existing
+// game deadline_at = coalesce(auto_end_at, started_at + 24 h, created_at + 24 h);
+// such a record gets that same value here, so the cached board still draws (and
+// an active game still ends on time) until the server answers. Only read, never
+// written: the next save stores the current shape.
+
+export const LEGACY_RECORD_END_KEY = "autoEndAt";
+export const LEGACY_GAME_END_KEY = "auto_end_at";
+const LEGACY_DEFAULT_LENGTH_MS = 24 * 60 * 60 * 1000;
+
+function legacyDeadline(game: Record<string, unknown>): string | null {
+  const end = game[LEGACY_GAME_END_KEY];
+  if (typeof end === "string") return end;
+  const from = typeof game.started_at === "string" ? game.started_at : game.created_at;
+  const ms = typeof from === "string" ? Date.parse(from) : Number.NaN;
+  return Number.isNaN(ms) ? null : new Date(ms + LEGACY_DEFAULT_LENGTH_MS).toISOString();
+}
+
+/** A record in the current shape: legacy ones mapped (see above), anything else as is. */
+export function upgradeLegacyRecord(value: Record<string, unknown>): Record<string, unknown> {
+  if ("deadlineAt" in value || !(LEGACY_RECORD_END_KEY in value)) return value;
+  const snapshot = value.snapshot;
+  if (!isRecord(snapshot) || !isRecord(snapshot.game) || "deadline_at" in snapshot.game) return value;
+  const deadline = legacyDeadline(snapshot.game);
+  if (deadline === null) return value;
+  const game: Record<string, unknown> = { ...snapshot.game, deadline_at: deadline };
+  delete game[LEGACY_GAME_END_KEY];
+  const record: Record<string, unknown> = { ...value, deadlineAt: deadline, snapshot: { ...snapshot, game } };
+  delete record[LEGACY_RECORD_END_KEY];
+  return record;
+}
+
+export function parseActiveGame(raw: unknown): ActiveGameRecord | null {
+  if (!isRecord(raw) || raw.version !== ACTIVE_GAME_VERSION) return null;
+  const value = upgradeLegacyRecord(raw);
   const ok =
     hasShape(value, {
       gameId: str,
       joinCode: str,
       name: str,
       status: oneOf("lobby", "active"),
-      autoEndAt: strOrNull,
+      deadlineAt: str,
       expiresAt: str,
       savedAt: str,
       userId: strOrNull,
@@ -186,7 +230,7 @@ export function toActiveGameRecord(
     joinCode: game.join_code,
     name: game.name,
     status,
-    autoEndAt: game.auto_end_at,
+    deadlineAt: game.deadline_at,
     expiresAt: game.expires_at,
     savedAt: now.toISOString(),
     userId,
@@ -199,15 +243,15 @@ function time(iso: string | null): number {
 }
 
 /**
- * Still worth returning to: an active game before its auto end, or a lobby
+ * Still worth returning to: an active game before its deadline, or a lobby
  * looked at in the last day; never past the game's 30-day expiry.
  */
 export function isReturnable(record: ActiveGameRecord, now: number): boolean {
   const expires = time(record.expiresAt);
   if (!(now < expires)) return false;
   if (record.status === "active") {
-    const autoEnd = time(record.autoEndAt);
-    return Number.isNaN(autoEnd) || now < autoEnd;
+    const deadline = time(record.deadlineAt);
+    return Number.isNaN(deadline) || now < deadline;
   }
   const saved = time(record.savedAt);
   return !Number.isNaN(saved) && now - saved < LOBBY_RECORD_MAX_AGE_MS;

@@ -38,9 +38,9 @@ Update the checkbox and status notes as each phase lands. See `CLAUDE.md` for in
 
 Replaces the fixed 24-hour auto-end with a host-set deadline (`games.deadline_at`): presets Tonight (3 AM) / 24 hours / This weekend (Sunday 11:59 PM) / custom, max 7 days, default Tonight; editable in the lobby; subtle countdown on the board; "1 hour left." toast once; auto-end at the deadline for everyone (cron backstop); host may extend once by up to 24 h (RPC-enforced); album expiry still from creation.
 
-- [ ] **11a — DB + core**: migration (add `deadline_at`/`deadline_extended_at`, drop `auto_end_at`, replace every RPC that used it, `set_deadline`, `extend_deadline`, `start_game` → `deadline_passed`), SQL tests, types, rpc wrappers, mechanical client rename, CLAUDE.md.
-  - Status notes: not started.
-- [ ] **11b — Deadline helpers + picker** (`src/lib/deadline`, `src/components/deadline/DeadlinePicker`): presets in the phone's time zone, validation (10 min … 7 days), countdown/describe formatting, `useNow`.
-  - Status notes: not started.
+- [x] **11a — DB + core**: migration (add `deadline_at`/`deadline_extended_at`, drop `auto_end_at`, replace every RPC that used it, `set_deadline`, `extend_deadline`, `start_game` → `deadline_passed`), SQL tests, types, rpc wrappers, mechanical client rename, CLAUDE.md.
+  - Status notes: DONE. Migration `20261026024940_game_deadline.sql` (backfill, status check rebuilt, `validate_deadline` with 9 min / 7 d+10 min slack, 5-arg `create_game`, `set_deadline`, `extend_deadline` once ≤ +1 day, `start_game` → `deadline_passed`, every RPC on `deadline_at`, column dropped). 34/34 SQL tests; types regenerated; wrappers; client renamed (legacy snapshots mapped). Open: a lobby open 24+ days could set a deadline after `expires_at` (cron deletes at expiry).
+- [x] **11b — Deadline helpers + picker** (`src/lib/deadline`, `src/components/deadline/DeadlinePicker`): presets in the phone's time zone, validation (10 min … 7 days), countdown/describe formatting, `useNow`.
+  - Status notes: DONE. `src/lib/deadline/{presets,format,useNow}.ts` (89 tests, explicit zones incl. DST), `DeadlinePicker` + `DeadlineSummary`.
 - [ ] **11c — UI wiring**: create form, lobby display + host edit, board countdown near the game name, single "1 hour left." toast, host Extend once, auto-end → recap, e2e `deadline.spec.ts`, TESTING.md.
   - Status notes: not started.

@@ -39,7 +39,7 @@ begin
 end
 $body$);
 
-select tests.run('e', 'start_game fails until every player (host included) is ready, then sets active/started_at/auto_end_at = +24h and completes the free center', $body$
+select tests.run('e', 'start_game fails until every player (host included) is ready, then sets active/started_at (the deadline stays as set) and completes the free center', $body$
 declare
   f tests.fixture;
   f2 tests.fixture;
@@ -71,10 +71,12 @@ begin
   perform public.set_ready(f.game_id, true);
 
   perform tests.login(f.users[1]);
+  v_game := public.set_deadline(f.game_id, now() + interval '5 hours');
   v_game := public.start_game(f.game_id);
   perform tests.is(v_game.status, 'active'::public.game_status, 'status active');
   perform tests.ok(v_game.started_at is not null, 'started_at set');
-  perform tests.is(v_game.auto_end_at, v_game.started_at + interval '24 hours', 'auto_end_at = started_at + 24h');
+  perform tests.is(v_game.deadline_at, now() + interval '5 hours', 'start keeps the host''s deadline');
+  perform tests.is(v_game.deadline_extended_at, null::timestamptz, 'not extended');
   perform tests.is(v_game.ended_at, null::timestamptz, 'ended_at null');
 
   select * into v_sq from public.squares where game_id = f.game_id and position = 12;
@@ -232,7 +234,7 @@ begin
 end
 $body$);
 
-select tests.run('r', 'create_game: validation, 25 squares with blanks filled, host is player color 0, join code format, expiry = created_at + 30 days', $body$
+select tests.run('r', 'create_game: validation, 25 squares with blanks filled, host is player color 0, join code format, expiry = created_at + 30 days, default deadline = +24 hours', $body$
 declare
   v_host uuid;
   v_game public.games;
@@ -253,7 +255,9 @@ begin
   perform tests.is(v_game.host_user_id, v_host, 'caller is host');
   perform tests.ok(v_game.join_code ~ '^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$', 'join code format');
   perform tests.is(v_game.expires_at, v_game.created_at + interval '30 days', 'expires_at = created_at + 30 days');
-  perform tests.ok(v_game.started_at is null and v_game.auto_end_at is null and v_game.ended_at is null, 'no timestamps yet');
+  perform tests.ok(v_game.started_at is null and v_game.ended_at is null, 'no timestamps yet');
+  perform tests.is(v_game.deadline_at, v_game.created_at + interval '24 hours', 'no deadline given: created_at + 24 hours');
+  perform tests.is(v_game.deadline_extended_at, null::timestamptz, 'not extended');
 
   perform tests.is((select count(*) from public.squares where game_id = v_game.id), 25::bigint, '25 squares');
   perform tests.is(

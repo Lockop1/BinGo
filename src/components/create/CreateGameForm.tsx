@@ -49,6 +49,8 @@ export function CreateGameForm() {
         host_name: host,
         free_center: freeCenter,
         squares: packToSquares(getPack(packId)),
+        // The server default (24 hours) until the deadline picker is wired in.
+        deadlineAt: null,
       });
       saveDisplayName(host);
       track("game_created", { pack: packId, free_center: freeCenter });

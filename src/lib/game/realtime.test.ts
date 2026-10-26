@@ -29,7 +29,7 @@ function game(overrides: Partial<Game> = {}): Game {
     created_at: "2026-10-23T20:00:00.000000+00:00",
     started_at: null,
     ended_at: null,
-    auto_end_at: null,
+    deadline_at: "2026-10-24T20:00:00.000000+00:00",
     expires_at: "2026-11-22T20:00:00.000000+00:00",
     ...overrides,
   };
