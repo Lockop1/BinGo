@@ -17,7 +17,8 @@ A mobile-first Next.js 16 + Supabase web app for friend-group activity bingo:
   transition on every phone, press-and-hold Complete, +1 counters that count
   exactly once under concurrency and offline, Undo with confirm, toasts in
   the top bar, bingo-line and blackout celebrations once per phone, host End
-  game, settings (theme / text size / square size) that always fit the width.
+  game, a quiet deadline countdown, settings (theme / text size / square
+  size) that always fit the width.
 - **Media and recap**: camera-first photo/video with 1600 px JPEG compression
   and the 15 s video check, background uploads to the private `game-media`
   bucket via signed URLs, Share to group chat, story-style recap with per-item
@@ -32,7 +33,7 @@ A mobile-first Next.js 16 + Supabase web app for friend-group activity bingo:
   policies, Realtime publication, explicit service_role grants — proven by 24
   SQL tests run on a local Postgres with a Supabase shim.
 - **Operations**: protected daily cleanup cron (`/api/cron/cleanup`,
-  `vercel.json`), 24-hour auto-end, `DEPLOY.md` checklist, a local
+  `vercel.json`), deadline backstop, `DEPLOY.md` checklist, a local
   PostgREST + GoTrue stand-in backend for end-to-end tests without Docker.
 
 Gates at hand-off: lint clean, production build OK, 360 unit tests, 28 SQL
@@ -59,6 +60,19 @@ fixed or explicitly deferred.
   under their old name); the other players' recaps offer "A new game is ready · Join", a
   one-tap join under their existing names.
 - **TESTING.md**: a step-by-step two-phone checklist (45 min) using the exact on-screen copy.
+
+## Game deadline (Phase 11)
+
+The fixed 24-hour auto-end is gone. The host picks a deadline when creating the game
+("Tonight (3 AM)" by default, "24 hours", "This weekend (Sunday 11:59 PM)" or a custom
+time, at most 7 days out, computed in the phone's own time zone with correct DST
+handling) and can change it in the lobby until Start. Everyone sees it in the lobby; the
+board shows a small countdown next to the game name and one "1 hour left." toast per
+phone. The host may extend the deadline once during the game by up to a day. At the
+deadline every phone moves to the recap, and the daily cron ends any active game past
+its deadline as a backstop. The database owns the rules (`games.deadline_at`,
+`set_deadline`, `extend_deadline`, `start_game` refusing a passed deadline); the 30-day
+album expiry still counts from creation.
 
 ## Live URL
 
