@@ -179,3 +179,141 @@ test("deadline: picked at creation, changed in the lobby, counted down, warned o
 
   await close();
 });
+
+test("a stale games read after the host's extension never brings back the old deadline or the Extend button", async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const phones = await twoPhonesInLobby(browser, { prefix: "Stale", deadline: "day" });
+  await startGame(phones);
+  const { host, close } = phones;
+  await expect(host.getByTestId("deadline-countdown")).toHaveText(/^23h 5\dm$/);
+
+  // From the moment the host taps Save, every `games` read the host's phone
+  // makes answers late with the row as it was before the extension (a slow bar
+  // connection, or a read that predates the commit): the resync poll keeps
+  // fetching it while the RPC result already shows the new deadline. Squares,
+  // players and media still come back fresh.
+  let before: { status: number; headers: Record<string, string>; body: Buffer } | null = null;
+  let replay = false;
+  let replayed = 0;
+  await host.route(/\/rest\/v1\/games\?/, async (route) => {
+    if (replay && before) {
+      replayed += 1;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await route.fulfill(before).catch(() => {});
+      return;
+    }
+    const response = await route.fetch();
+    const body = await response.body();
+    if (!replay) before = { status: response.status(), headers: response.headers(), body };
+    await route.fulfill({ response, body });
+  });
+  await expect.poll(() => before !== null, { timeout: 5_000 }).toBe(true);
+
+  await host.getByTestId("players-button").click();
+  await host.getByTestId("extend-deadline").click();
+  const extend = host.getByTestId("extend-sheet");
+  await extend.getByTestId("extend-option-1h").click();
+  replay = true;
+  await extend.getByTestId("extend-save").click();
+  await expect(extend).toBeHidden();
+  // 24 h 5x m left: "1d" from here on.
+  await expect(host.getByTestId("deadline-countdown")).toHaveText(/^1d$/, LIVE);
+  await host.getByTestId("players-button").click();
+  await expect(host.getByTestId("deadline-extended")).toHaveText("Deadline extended once", LIVE);
+
+  // Several polls bring the pre-extension row; none of them may undo what the phone has shown.
+  const seen = new Set<string>();
+  const until = Date.now() + 6_000;
+  while (Date.now() < until) {
+    seen.add(`${await host.getByTestId("deadline-countdown").textContent()}|extend=${await host.getByTestId("extend-deadline").count()}`);
+    await host.waitForTimeout(100);
+  }
+  expect(replayed, "stale games reads served").toBeGreaterThanOrEqual(3);
+  expect([...seen]).toEqual(["1d|extend=0"]);
+  await expect(host.getByTestId("deadline-extended")).toBeVisible();
+
+  // Fresh reads again: still the extension.
+  replay = false;
+  await host.waitForTimeout(2_000);
+  await expect(host.getByTestId("deadline-countdown")).toHaveText(/^1d$/);
+  await expect(host.getByTestId("extend-deadline")).toHaveCount(0);
+  await close();
+});
+
+test("create form: a preset that drifts under 10 minutes moves on with a notice, and Create is never disabled without a reason", async ({
+  browser,
+}) => {
+  test.setTimeout(90_000);
+
+  /** One look at the deadline part of the form. */
+  const look = async (page: Page, preset: string) => ({
+    row: (await page.getByTestId(`deadline-option-${preset}`).getByTestId("deadline-resolved").textContent())?.replace(/\s+/g, " "),
+    notice: (await page.getByTestId("deadline-refresh-notice").count()) ? await page.getByTestId("deadline-refresh-notice").textContent() : null,
+    problem: (await page.getByTestId("create-deadline-problem").count()) ? await page.getByTestId("create-deadline-problem").textContent() : null,
+    createEnabled: await page.getByTestId("create-game").isEnabled(),
+  });
+
+  /** A New York phone whose clock reads `iso`, on the create form with a name typed in. */
+  const formAt = async (iso: string) => {
+    const context = await browser.newContext({ timezoneId: "America/New_York" });
+    await context.clock.install({ time: new Date(iso) });
+    const page = await context.newPage();
+    await page.goto("/new");
+    await page.waitForLoadState("networkidle");
+    await page.getByTestId("game-name").fill("E2E Drift");
+    await page.getByTestId("host-name").fill("Hosty");
+    return { context, page };
+  };
+
+  // (a) Tonight picked at 02:49:40 (the verifier's run): 3:00 AM is 10m 20s away.
+  {
+    const { context, page } = await formAt("2026-10-20T06:49:40Z"); // Tue 02:49:40 EDT
+    await expect(page.getByTestId("deadline-picker")).toHaveAttribute("data-selected", "tonight");
+    expect(await look(page, "tonight")).toEqual({ row: "Tonight 3:00 AM", notice: null, problem: null, createEnabled: true });
+    // Step through 02:50:00 a second at a time: Create is enabled, or a line says why not.
+    for (let i = 0; i < 30; i++) {
+      await page.clock.runFor(1_000);
+      const seen = await look(page, "tonight");
+      expect(seen.createEnabled || seen.problem !== null, `at +${i + 1}s: ${JSON.stringify(seen)}`).toBe(true);
+    }
+    expect(await look(page, "tonight")).toEqual({
+      row: "Tomorrow 3:00 AM",
+      notice: "Updated to the next 3 AM — the earlier time is less than 10 minutes away",
+      problem: null,
+      createEnabled: true,
+    });
+    await expect(page.getByTestId("create-deadline-summary")).toContainText(/ · 1d$/);
+    // Picking a row again clears the notice.
+    await page.getByTestId("deadline-option-day").click();
+    await expect(page.getByTestId("deadline-refresh-notice")).toHaveCount(0);
+    await expect(page.getByTestId("create-game")).toBeEnabled();
+    await context.close();
+  }
+
+  // (b) "This weekend" late on Sunday: the 7-day clamp is valid the moment it is picked.
+  {
+    const { context, page } = await formAt("2026-10-26T03:49:50Z"); // Sun Oct 25, 11:49:50 PM EDT
+    await page.getByTestId("deadline-option-weekend").click();
+    await expect(page.getByTestId("create-game")).toBeEnabled({ timeout: 1_000 });
+    expect((await look(page, "weekend")).problem).toBeNull();
+    await context.close();
+  }
+
+  // (c) "This weekend" picked at 11:48 PM on Sunday, left open past 11:49 PM: it moves to next week and says so.
+  {
+    const { context, page } = await formAt("2026-10-26T03:48:00Z"); // Sun Oct 25, 11:48:00 PM EDT
+    await page.getByTestId("deadline-option-weekend").click();
+    expect(await look(page, "weekend")).toMatchObject({ row: "Tonight 11:59 PM", notice: null, createEnabled: true });
+    await page.clock.runFor(61_000);
+    const moved = await look(page, "weekend");
+    expect(moved).toMatchObject({
+      notice: "Updated to the next weekend — the earlier time is less than 10 minutes away",
+      problem: null,
+      createEnabled: true,
+    });
+    expect(moved.row).not.toBe("Tonight 11:59 PM");
+    await context.close();
+  }
+});

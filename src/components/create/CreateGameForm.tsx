@@ -11,8 +11,9 @@ import { getPack, packToSquares, type PackId } from "@/content/packs";
 import { track } from "@/lib/analytics";
 import { errorCopy } from "@/lib/game/errors";
 import { createGame } from "@/lib/game/rpc";
-import { fromIso, validateDeadline } from "@/lib/deadline/presets";
-import { useNow } from "@/lib/deadline/useNow";
+import { deadlineBlockMessage, tooSoonFromMs } from "@/lib/deadline/drift";
+import { fromIso, validateDeadline, type DeadlinePreset } from "@/lib/deadline/presets";
+import { useNowUntil } from "@/lib/deadline/useNow";
 import {
   DISPLAY_NAME_MAX,
   GAME_NAME_MAX,
@@ -34,16 +35,31 @@ export function CreateGameForm() {
   const hostName = hostDraft ?? storedName;
   // Filled by the picker right after mount (Tonight), so the default needs no tap.
   const [deadlineIso, setDeadlineIso] = useState<string | null>(null);
-  const onDeadline = useCallback((iso: string) => setDeadlineIso(iso), []);
+  const [deadlinePreset, setDeadlinePreset] = useState<DeadlinePreset | null>(null);
+  // When the picker produced the value: validity is never judged on a clock
+  // reading older than that (a 7-day clamp would read as "too far").
+  const [deadlineSetAt, setDeadlineSetAt] = useState(0);
+  const onDeadline = useCallback((iso: string, preset: DeadlinePreset) => {
+    setDeadlineIso(iso);
+    setDeadlinePreset(preset);
+    setDeadlineSetAt(Date.now());
+  }, []);
   const deadlineHeadingId = useId();
-  const now = useNow(15_000);
+  const deadline = fromIso(deadlineIso);
+  // Wakes at the same moment as the picker's clock when the value crosses the
+  // 10-minute minimum, so Create never waits on a stale reading.
+  const now = useNowUntil(15_000, deadline ? tooSoonFromMs(deadline) : null);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submitting = useRef(false);
 
-  const deadline = fromIso(deadlineIso);
-  const deadlineValid = deadline !== null && now !== null && validateDeadline(deadline, now) === "ok";
+  const checkAt = now ? new Date(Math.max(now.getTime(), deadlineSetAt)) : null;
+  const deadlineValidity = deadline && checkAt ? validateDeadline(deadline, checkAt) : null;
+  const deadlineValid = deadlineValidity === "ok";
+  // A preset re-resolves itself (and says so); a Custom time's own line says
+  // what is wrong. Anything else that keeps Create disabled is explained here.
+  const deadlineMessage = deadlinePreset === "custom" ? null : deadlineBlockMessage(deadlineValidity);
   const valid = isValidGameName(name) && isValidDisplayName(hostName) && deadlineValid;
 
   async function onSubmit(event: FormEvent) {
@@ -112,6 +128,11 @@ export function CreateGameForm() {
         <p className="min-h-7 text-lg leading-7" data-testid="create-deadline-summary">
           <DeadlineSummary deadlineIso={deadlineIso} />
         </p>
+        {deadlineMessage ? (
+          <p role="status" className="text-lg leading-7 text-danger" data-testid="create-deadline-problem">
+            {deadlineMessage}
+          </p>
+        ) : null}
       </section>
 
       <TextField

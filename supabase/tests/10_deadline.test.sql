@@ -292,8 +292,8 @@ begin
     (select array_agg(column_name::text order by column_name) from information_schema.columns
      where table_schema = 'public' and table_name = 'games'),
     array['created_at', 'deadline_at', 'deadline_extended_at', 'ended_at', 'expires_at', 'free_center',
-      'host_user_id', 'id', 'join_code', 'name', 'next_game_id', 'next_join_code', 'started_at', 'status'],
-    'games columns: deadline_at / deadline_extended_at in, the old end column out');
+      'host_user_id', 'id', 'join_code', 'name', 'next_game_id', 'next_join_code', 'started_at', 'status', 'updated_at'],
+    'games columns: deadline_at / deadline_extended_at in, the old end column out (updated_at: test aj)');
   perform tests.is(
     (select is_nullable from information_schema.columns where table_schema = 'public' and table_name = 'games' and column_name = 'deadline_at'),
     'NO', 'deadline_at not null');

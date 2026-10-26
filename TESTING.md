@@ -180,8 +180,12 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
 12. Extend once. **Phone A (host):** open the "Players" sheet, tap "Extend deadline", leave "+1 hour" and tap "Save".
     - [ ] Both small countdowns change from "23h <n>m" to "1d" (Phone B within about a second). Phone A's sheet
       now reads "Deadline extended once" instead of the button.
-    - If it fails → "The deadline can only be extended once." on a first try, or "Only the host can do that.",
-      means the `game_deadline` migration isn't pushed (HUMAN_STEPS.md §2).
+    - If it fails → "Only the host can do that." means Phone A's sign-in changed since it created the game
+      (cleared storage, a private tab or another browser): note it. "The deadline can only be extended once." on a
+      first try means the game was already extended (a double tap, or the host in another tab); if the sheet still
+      offers "Extend deadline" afterwards, note it as a sync bug. "Something went wrong. Check your connection and
+      try again." with a good signal means the database lacks `extend_deadline` (migrations not pushed,
+      HUMAN_STEPS.md §2), though with that schema the board would not have loaded at all.
 
 ## 7. Bingo
 

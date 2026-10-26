@@ -1,7 +1,7 @@
 "use client";
 
 import { Images, Settings } from "lucide-react";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Fragment, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Toasts } from "@/components/board/Toasts";
 import { isUnderOneHour } from "@/lib/deadline/format";
 import { useCountdown } from "@/lib/deadline/useNow";
@@ -16,6 +16,22 @@ const ICON_BUTTON =
 
 /** A resync must have been showing `syncing` this long before the soft dot appears. */
 export const SYNCING_MARK_DELAY_MS = 400;
+
+/**
+ * A game name longer than this many characters gets a width floor next to the
+ * countdown (`TITLE_FLOOR`), so a long name never truncates to two letters.
+ */
+export const TITLE_MIN_CHARS = 8;
+
+/**
+ * The title's floor: about TITLE_MIN_CHARS characters plus the ellipsis in the
+ * board's title face (20 px marker on the whiteboard, "Saturday…" ≈ 4.9em;
+ * condensed caps on the scoreboard, "SATURDAY…" ≈ 3.9em), but never so wide
+ * that the countdown's first unit (at most "59m" plus its gap, under 1.75rem)
+ * loses its room.
+ */
+const TITLE_FLOOR =
+  "min-w-[min(5em,calc(100%-1.75rem))] in-data-[theme=scoreboard]:min-w-[min(4em,calc(100%-1.75rem))]";
 
 /**
  * What the top bar says about sync. `none` when live; `syncing` (a soft dot)
@@ -75,11 +91,19 @@ const assumeOnline = () => true;
  * Renders nothing until mounted (hydration-safe) and once the deadline has
  * passed (the game screen moves to the recap then). Tapping it opens Players,
  * where the deadline line and the host's Extend live.
+ *
+ * Never broken mid-label (`white-space: nowrap`, each unit a box of its own).
+ * When a long name at its floor leaves too little room for the whole label,
+ * the trailing unit drops onto a second line that is clipped, so only whole
+ * units show: "23h 59m" reads "23h", "6d 23h" reads "6d" (one-unit labels such
+ * as "45m" never change). The full label stays the text and the accessible
+ * name. The tap area stays at least 44 px wide (`before:`), whatever the width.
  */
 function DeadlineCountdown({ deadlineAt, hidden, onTap }: { deadlineAt: string | null; hidden: boolean; onTap: () => void }) {
   const { now, countdown } = useCountdown(deadlineAt);
   if (!now || !countdown || countdown.tier === "passed" || !deadlineAt) return null;
   const urgent = isUnderOneHour(new Date(deadlineAt), now);
+  const units = countdown.label.split(" ");
   return (
     <button
       type="button"
@@ -90,11 +114,19 @@ function DeadlineCountdown({ deadlineAt, hidden, onTap }: { deadlineAt: string |
       data-testid="deadline-countdown"
       data-tier={countdown.tier}
       data-urgent={urgent ? "true" : undefined}
-      className={`inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center px-1 font-sans text-base whitespace-nowrap tabular-nums transition-opacity duration-200 motion-reduce:transition-none ${
+      className={`relative flex h-11 flex-[0_1_auto] items-center pl-1 font-sans text-base whitespace-nowrap tabular-nums transition-opacity duration-200 before:absolute before:inset-y-0 before:left-1/2 before:w-[max(100%,2.75rem)] before:-translate-x-1/2 motion-reduce:transition-none ${
         urgent ? "text-board-ink" : "text-board-muted"
       } ${hidden ? "pointer-events-none opacity-0" : "opacity-100"}`}
     >
-      {countdown.label}
+      {/* One 44 px line of whole units; a unit that does not fit wraps below it and is clipped. */}
+      <span className="flex h-11 flex-wrap content-start gap-x-[0.3em] overflow-hidden leading-11">
+        {units.map((unit, i) => (
+          <Fragment key={i}>
+            {i > 0 ? " " : null}
+            <span>{unit}</span>
+          </Fragment>
+        ))}
+      </span>
     </button>
   );
 }
@@ -109,6 +141,12 @@ function DeadlineCountdown({ deadlineAt, hidden, onTap }: { deadlineAt: string |
  * fixed slot that is always reserved at the end of the title (it only fades
  * in and out). The offline / sending mark is a 44px tap target (retry) and
  * only takes room from the truncating title; the buttons never move.
+ *
+ * Title and countdown share the slot: the title (flex basis 0, at most its own
+ * width) grows into whatever the whole countdown leaves. When even that is not
+ * room enough, a name longer than TITLE_MIN_CHARS keeps its floor (TITLE_FLOOR)
+ * and the countdown gives way instead, down to its first unit (see
+ * DeadlineCountdown); only then does the title shrink below the floor.
  */
 export function TopBar({
   name,
@@ -153,15 +191,14 @@ export function TopBar({
       {/* Centre slot: the title, or the current toast over it (same box, so no layout shift). */}
       <div className="relative flex min-w-0 flex-1 items-center self-stretch">
         <h1
-          className={`min-w-0 truncate font-board text-xl leading-tight transition-opacity duration-200 motion-reduce:transition-none ${
-            toast ? "opacity-0" : "opacity-100"
-          }`}
+          className={`max-w-max flex-[1_1_0%] truncate font-board text-xl leading-tight transition-opacity duration-200 motion-reduce:transition-none ${
+            Array.from(name).length > TITLE_MIN_CHARS ? TITLE_FLOOR : "min-w-0"
+          } ${toast ? "opacity-0" : "opacity-100"}`}
           data-testid="board-title"
         >
           {name}
         </h1>
         <DeadlineCountdown deadlineAt={deadlineAt} hidden={toast !== null} onTap={onPlayers} />
-        <span aria-hidden className="flex-1" />
         <Toasts toast={toast} theme={theme} names={names} onTap={(t) => onToast?.(t)} />
       </div>
 

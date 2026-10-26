@@ -36,9 +36,9 @@ A mobile-first Next.js 16 + Supabase web app for friend-group activity bingo:
   `vercel.json`), deadline backstop, `DEPLOY.md` checklist, a local
   PostgREST + GoTrue stand-in backend for end-to-end tests without Docker.
 
-Gates at hand-off: lint clean, production build OK, 360 unit tests, 28 SQL
-tests, 24 Playwright specs (two-phone flows; +1 analytics spec run with a key),
-two independent verification passes in `VERIFICATION.md` with every finding
+Gates at hand-off: lint clean, production build OK, 483 unit tests, 37 SQL
+tests, 27 Playwright specs (two-phone flows; +1 analytics spec run with a key),
+three independent verification passes in `VERIFICATION.md` with every finding
 fixed or explicitly deferred.
 
 ## Spec additions (Phase 10)
@@ -84,7 +84,7 @@ pre-flight checklist.
 
 1. Create the Supabase project, enable Anonymous sign-ins, copy the URL and
    keys into `.env.local`.
-2. `npx supabase link` then `npx supabase db push` (6 migrations), then deploy
+2. `npx supabase link` then `npx supabase db push` (7 migrations), then deploy
    the matching app build right after.
 3. Smoke-test on two phones against the real project (Realtime, uploads,
    signed URLs, recap) — the one thing the local stand-in cannot prove.

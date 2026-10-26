@@ -25,6 +25,7 @@ export type Database = {
           "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
+          "updated_at": string;
         };
         ComputedFields: never;
         Insert: {
@@ -42,6 +43,7 @@ export type Database = {
           "next_join_code"?: string | null;
           "started_at"?: string | null;
           "status"?: Database["public"]['Enums']["game_status"];
+          "updated_at"?: string;
         };
         Update: {
           "created_at"?: string;
@@ -58,6 +60,7 @@ export type Database = {
           "next_join_code"?: string | null;
           "started_at"?: string | null;
           "status"?: Database["public"]['Enums']["game_status"];
+          "updated_at"?: string;
         };
         Relationships: [
           {
@@ -360,6 +363,7 @@ export type Database = {
           "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
+          "updated_at": string;
         };
         SetofOptions: {
           from: "*";
@@ -387,6 +391,7 @@ export type Database = {
           "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
+          "updated_at": string;
         };
         SetofOptions: {
           from: "*";
@@ -415,6 +420,7 @@ export type Database = {
           "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
+          "updated_at": string;
         };
         SetofOptions: {
           from: "*";
@@ -519,6 +525,7 @@ export type Database = {
           "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
+          "updated_at": string;
         };
         SetofOptions: {
           from: "*";
@@ -583,6 +590,7 @@ export type Database = {
           "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
+          "updated_at": string;
         };
         SetofOptions: {
           from: "*";
@@ -611,6 +619,7 @@ export type Database = {
           "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
+          "updated_at": string;
         };
         SetofOptions: {
           from: "*";
@@ -659,6 +668,7 @@ export type Database = {
           "next_join_code": string | null;
           "started_at": string | null;
           "status": Database["public"]['Enums']["game_status"];
+          "updated_at": string;
         };
         SetofOptions: {
           from: "*";

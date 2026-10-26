@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { presetRefreshNotice, refreshDriftedPreset, tooSoonFromMs } from "@/lib/deadline/drift";
 import { countdown, deadlineSummaryText, describeDeadline, isUnderOneHour } from "@/lib/deadline/format";
 import {
   DEFAULT_DEADLINE_PRESET,
@@ -14,8 +15,9 @@ import {
   toIso,
   validateDeadline,
   type DeadlinePreset,
+  type FixedDeadlinePreset,
 } from "@/lib/deadline/presets";
-import { useCountdown, useHydrated, useNow } from "@/lib/deadline/useNow";
+import { useCountdown, useHydrated, useNowUntil } from "@/lib/deadline/useNow";
 
 const OPTIONS: { value: DeadlinePreset; label: string }[] = [
   { value: "tonight", label: "Tonight (3 AM)" },
@@ -36,7 +38,10 @@ export type DeadlinePickerProps = {
   value: string | null;
   /** Called with the new deadline and which row produced it. */
   onChange: (nextIso: string, preset: DeadlinePreset) => void;
-  /** Fixed "now" (tests, previews). Default: the live clock, refreshed every minute. */
+  /**
+   * Fixed "now" (tests, previews). Default: the live clock, refreshed every
+   * minute and right when `value` crosses the 10-minute minimum.
+   */
   now?: Date;
   /** IANA zone for presets and text. Default: the phone's zone. */
   timeZone?: string;
@@ -62,8 +67,12 @@ export type DeadlinePickerProps = {
  * - When `value` is `null`, the picker selects Tonight and calls `onChange`
  *   once after mount, so the form always has a deadline to submit. Likewise, if
  *   a selected preset's value drifts under 10 minutes away (the screen was left
- *   open), it is re-resolved and `onChange` fires with the fresh time. Neither
- *   happens while `disabled`.
+ *   open), it is re-resolved the moment that happens (`refreshDriftedPreset`;
+ *   the clock wakes for it) and `onChange` fires with the fresh time, and a
+ *   one-line notice under the rows says why the time moved
+ *   (`presetRefreshNotice`, `data-testid="deadline-refresh-notice"`) until the
+ *   next pick or edit. Neither happens while `disabled`. A Custom time is
+ *   never moved (its own line says when it is too soon).
  * - With an initial `value`, the row it matches (`matchPreset`) is selected,
  *   else Custom.
  * - Hydration: all time-dependent text (and the custom input) renders only
@@ -81,15 +90,18 @@ export function DeadlinePicker({
   const autoId = useId();
   const baseId = idPrefix ?? `deadline${autoId.replace(/[^A-Za-z0-9_-]/g, "")}`;
   const hydrated = useHydrated();
-  const liveNow = useNow(60_000);
+  const current = fromIso(value);
+  const liveNow = useNowUntil(60_000, current ? tooSoonFromMs(current) : null);
   const now = hydrated ? (nowProp ?? liveNow) : null;
   const zone = useMemo(() => resolveTimeZone(timeZone), [timeZone]);
-  const current = fromIso(value);
 
   // The row the person (or the initial value) chose; null until time is known.
   const [choice, setChoice] = useState<DeadlinePreset | null>(null);
   const [customText, setCustomText] = useState("");
   const [seenValue, setSeenValue] = useState(value);
+  // The preset the picker moved on its own (drift), and the value it moved from.
+  const [notice, setNotice] = useState<FixedDeadlinePreset | null>(null);
+  const [driftedFrom, setDriftedFrom] = useState<string | null>(null);
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const lastAuto = useRef<string | null>(null);
 
@@ -106,12 +118,24 @@ export function DeadlinePicker({
 
   const selected: DeadlinePreset | null = choice ?? (value ? null : DEFAULT_DEADLINE_PRESET);
 
+  // A selected preset whose value drifted under the minimum: the effect below
+  // re-resolves it; the notice is noted here, with the render that sees it.
+  const drifted =
+    now !== null && !disabled && selected !== null && selected !== "custom" && current !== null
+      ? refreshDriftedPreset(selected, current, now, zone) !== null
+      : false;
+  if (drifted && value !== driftedFrom && selected !== null && selected !== "custom") {
+    setDriftedFrom(value);
+    setNotice(selected);
+  }
+
   // Fill in (or refresh) a preset's value; see "Behaviour" above.
   useEffect(() => {
     if (!now || disabled || selected === null || selected === "custom") return;
     const held = fromIso(value);
-    if (held && validateDeadline(held, now) !== "too_soon") return;
-    const next = toIso(computePreset(selected, now, zone));
+    const fresh = held ? refreshDriftedPreset(selected, held, now, zone) : computePreset(selected, now, zone);
+    if (!fresh) return;
+    const next = toIso(fresh);
     if (lastAuto.current === next) return;
     lastAuto.current = next;
     onChange(next, selected);
@@ -120,6 +144,7 @@ export function DeadlinePicker({
   const select = (preset: DeadlinePreset) => {
     if (disabled) return;
     setChoice(preset);
+    setNotice(null);
     if (!hydrated) return; // The effect above fills the value in after mount.
     const at = nowProp ?? new Date();
     if (preset === "custom") {
@@ -146,6 +171,7 @@ export function DeadlinePicker({
 
   const onCustomInput = (text: string) => {
     setCustomText(text);
+    setNotice(null);
     const parsed = parseLocalInput(text, zone);
     if (!parsed || disabled) return;
     if (validateDeadline(parsed, nowProp ?? new Date()) === "ok") onChange(toIso(parsed), "custom");
@@ -218,6 +244,16 @@ export function DeadlinePicker({
           );
         })}
       </div>
+      {notice !== null && notice === selected ? (
+        <p
+          role="status"
+          data-testid="deadline-refresh-notice"
+          data-preset={notice}
+          className="px-1 text-base leading-6 text-ink-soft"
+        >
+          {presetRefreshNotice(notice)}
+        </p>
+      ) : null}
       {selected === "custom" && now && bounds ? (
         <div className="flex min-w-0 flex-col px-1">
           <input

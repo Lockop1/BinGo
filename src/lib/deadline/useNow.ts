@@ -1,4 +1,5 @@
 import { useMemo, useSyncExternalStore } from "react";
+import { wakeDelayMs } from "@/lib/deadline/drift";
 import { countdown, countdownTickDelayMs, describeDeadline, type Countdown } from "@/lib/deadline/format";
 import { fromIso, resolveTimeZone } from "@/lib/deadline/presets";
 
@@ -71,6 +72,18 @@ const getServerNow = (): Date | null => null;
  */
 export function useNow(intervalMs = 60_000): Date | null {
   const clock = useMemo(() => createClock(() => intervalMs), [intervalMs]);
+  return useSyncExternalStore(clock.subscribe, clock.getSnapshot, getServerNow);
+}
+
+/**
+ * Like `useNow(intervalMs)`, but the clock also wakes right at `dueMs` (epoch
+ * ms) when that comes sooner than the next interval tick, e.g. the moment a
+ * picked deadline crosses the 10-minute minimum (`tooSoonFromMs`), so the
+ * picker and the form react at once instead of up to a minute later. `null`
+ * (or a past `dueMs`) means plain interval ticks. Hydration-safe like `useNow`.
+ */
+export function useNowUntil(intervalMs: number, dueMs: number | null): Date | null {
+  const clock = useMemo(() => createClock((now) => wakeDelayMs(intervalMs, dueMs, now.getTime())), [intervalMs, dueMs]);
   return useSyncExternalStore(clock.subscribe, clock.getSnapshot, getServerNow);
 }
 

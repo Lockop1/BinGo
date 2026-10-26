@@ -1,14 +1,14 @@
 import type { Database, Tables } from "@/types/database";
 
 type GameRow = Tables<"games">;
-type OptionalColumns = "next_game_id" | "next_join_code" | "deadline_extended_at";
+type OptionalColumns = "next_game_id" | "next_join_code" | "deadline_extended_at" | "updated_at";
 /**
- * A `games` row. The rematch columns (set by `play_again`) and
- * `deadline_extended_at` (set by `extend_deadline`) are optional on the client:
- * game snapshots cached in `bingo.activeGame` by builds from before they
- * existed are restored as they were saved. Read them with `?? null`.
- * `deadline_at` is always present (`activeGame.ts` fills it in for such older
- * snapshots).
+ * A `games` row. The rematch columns (set by `play_again`),
+ * `deadline_extended_at` (set by `extend_deadline`) and `updated_at` (the row
+ * version `mergeGame` compares) are optional on the client: game snapshots
+ * cached in `bingo.activeGame` by builds from before they existed are restored
+ * as they were saved. Read them with `?? null`. `deadline_at` is always present
+ * (`activeGame.ts` fills it in for such older snapshots).
  */
 export type Game = Omit<GameRow, OptionalColumns> & Partial<Pick<GameRow, OptionalColumns>>;
 export type Player = Tables<"players">;

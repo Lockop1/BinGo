@@ -135,7 +135,8 @@ These are invariants. Every phase must keep all of them true.
   `deadline_at` (not null, `> created_at`; when the game ends automatically: host-set at creation /
   in the lobby, default now + 24 h on the server), `deadline_extended_at` (null until the host's one
   live extension), `expires_at` (`created_at` + 30 days, whatever the deadline), `next_game_id` /
-  `next_join_code` (set by `play_again`; the rematch lobby other players join with one tap).
+  `next_join_code` (set by `play_again`; the rematch lobby other players join with one tap),
+  `updated_at` (trigger-stamped on every update; clients drop older rows by it).
 - **players**: `id`, `game_id`, `user_id`, `display_name`, `color`, `is_ready`, `joined_at`;
   unique (`game_id`, `user_id`); max 10 per game.
 - **squares**: `id`, `game_id`, `position` 0–24, `label`, `details`, `target_count` default 1,
@@ -285,27 +286,32 @@ Source of truth: `supabase/migrations/` (schema + RLS, RPCs, storage). Types: `s
 | `target_count` | integer 1–99; `null` → 1 (1 = normal square, >1 = counter square) |
 | `position` | integer 0–24, row-major (`row * 5 + col`); 12 is the center |
 | join `code` | upper-cased, non-alphanumerics stripped (so `abcd-efgh` works); 8 chars from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` |
-| `deadline_at` (`create_game`, `set_deadline`) | `timestamptz` (send an ISO string); **10 minutes to 7 days from now** (the server accepts a little slack either side for clock drift: `now + 9 min` … `now + 7 days 10 min`); `create_game` with `null` / omitted → `now() + 24 h` |
-| `deadline_at` (`extend_deadline`) | strictly later than the current `deadline_at` and at most current `deadline_at` + 1 day (exact, no slack) |
+| `deadline_at` (`create_game`, `set_deadline`) | `timestamptz` (send an ISO string); **10 minutes to 7 days from now** (the server accepts a little slack either side for clock drift: `now + 9 min` … `now + 168 h 10 min`); `create_game` with `null` / omitted → `now() + 24 h` |
+| `deadline_at` (`extend_deadline`) | strictly later than the current `deadline_at` and at most current `deadline_at` + 24 hours (exact, no slack) |
+
+All deadline caps are elapsed time, written in hours and minutes in SQL (`interval '168 hours'`,
+`'24 hours'`), never calendar days: for `timestamptz`, `'1 day'` / `'7 days'` follow the session
+`TimeZone`, which any client can set (PostgREST honours `Prefer: timezone=…`), and would be 23 or 25
+hours across a DST change. "7 days" and "1 day" in this file mean 168 and 24 hours.
 
 ### RPCs
 
 | RPC (exact argument names) | Returns | Who / when | Errors, in check order |
 | --- | --- | --- | --- |
 | `create_game(name text, host_name text, free_center boolean = true, squares jsonb = '[]', deadline_at timestamptz = null)` | `games` row | any signed-in user; caller becomes host and player color 0 (`is_ready = false`); 25 squares created; `deadline_at` stored (`null` → `now() + 24 h`), `deadline_extended_at = null`. The only `create_game` (the 4-argument one was dropped, so PostgREST never sees two overloads) | `not_authenticated`, `invalid_name`, `invalid_display_name`, then per square: `invalid_squares` / `label_too_long` / `details_too_long` / `invalid_target_count`; `invalid_deadline`; `join_code_generation_failed` (practically never) |
-| `join_game(code text, display_name text)` | `players` row | any signed-in user; game in `lobby` or `active` (late join). Already a member: returns the existing row (any status) and updates `display_name` unless ended. New players get the lowest free color 0–9 | `not_authenticated`, `invalid_display_name`, `game_not_found`, `game_ended` (ended, overdue or expired), `game_full` (10 players) |
+| `join_game(code text, display_name text)` | `players` row | any signed-in user; game in `lobby` or `active` (late join). Already a member: returns the existing row (any status) and updates `display_name` unless the game is effectively ended (ended, active past its deadline, or past `expires_at`: the same test that refuses newcomers). New players get the lowest free color 0–9 | `not_authenticated`, `invalid_display_name`, `game_not_found`, `game_ended` (ended, overdue or expired), `game_full` (10 players) |
 | `peek_game(code text)` | `game_preview` | any signed-in user (join screen, no membership needed) | `not_authenticated`, `game_not_found` |
 | `peek_game_public(code text)` | `game_preview` | **anyone, including `anon` (no session)**: the same normalisation and result as `peek_game`, for link previews (Open Graph images, chat-app crawlers). Games past `expires_at` count as unknown. Call it with `peekGamePublic` from `lib/game/publicRpc.ts` (plain anon client, works in server code) | `game_not_found` (unknown, malformed or expired code) |
 | `set_ready(game_id uuid, ready boolean)` | `players` row (caller) | player; `lobby` only | `not_authenticated`, `game_not_found`, `game_not_in_lobby`, `invalid_argument` (`ready` null) |
 | `update_square(game_id uuid, position integer, label text, details text, target_count integer)` | `squares` row | any player; `lobby` only; replaces label/details/target (last write wins), `current_count` reset to 0 | `not_authenticated`, `game_not_found`, `game_not_in_lobby`, `invalid_position`, `label_too_long`, `details_too_long`, `invalid_target_count` |
 | `set_free_center(game_id uuid, enabled boolean)` | `games` row | host only; `lobby` only | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `invalid_argument` (`enabled` null) |
-| `set_deadline(game_id uuid, deadline_at timestamptz)` | `games` row | host only; `lobby` only; replaces `deadline_at` (any number of times before the start); never touches `deadline_extended_at` or `expires_at` | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `invalid_deadline` (null, under 10 minutes or over 7 days ahead) |
+| `set_deadline(game_id uuid, deadline_at timestamptz)` | `games` row | host only; `lobby` only; replaces `deadline_at` (any number of times before the start); never touches `deadline_extended_at` or `expires_at` | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `invalid_deadline` (null, under 10 minutes or over 7 days (168 h) ahead) |
 | `start_game(game_id uuid)` | `games` row | host only; `lobby` only; the deadline must not have passed (`deadline_at > now()`; otherwise the host picks a new one with `set_deadline`); **every** player incl. the host must be ready. Sets `status = 'active'`, `started_at = now()`; `deadline_at` stays as set. If `free_center`: square 12 completed with `completed_by_player_id = null`, `current_count = target_count`, label `'FREE'` if blank | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `deadline_passed`, `players_not_ready` |
 | `complete_square(game_id uuid, position integer)` | `square_result` | any player; `active` only; only squares with `target_count = 1`. Already completed (by anyone, incl. free center) → `applied = false` + current row, **no error** | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `is_counter` (use `increment_square`) |
 | `increment_square(game_id uuid, position integer, action_id uuid = null)` | `square_result` | any player; `active` only; counter squares (`target_count > 1`). +1 under the square's row lock; reaching the target completes it and credits the caller. Already completed → `applied = false`. `action_id` is a client-generated UUID per tap, sent again unchanged on every retry of that tap: each id counts at most once (a repeat → `applied = false` + the current row, recorded in the internal `square_increments` log), while different ids always all count, so simultaneous and offline taps are never lost. `null` → a plain +1 with no retry protection. Either way, on `applied = false` adopt the returned row | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `not_counter` |
 | `undo_completion(game_id uuid, position integer)` | `square_result` | the completer or the host; `active` only. Clears completion; `current_count = target_count - 1` (0 for normal squares). Not completed → `applied = false`, no error. Free center (completed by nobody) can never be undone | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `not_allowed` |
 | `end_game(game_id uuid)` | `games` row | host only; from `lobby` **or** `active` (in the lobby it is the host's way out, since the host cannot `leave_game`); sets `status = 'ended'`, `ended_at` (= `deadline_at` if already overdue, else now). Already ended → returns row unchanged | `not_authenticated`, `game_not_found`, `not_host` |
-| `extend_deadline(game_id uuid, deadline_at timestamptz)` | `games` row | host only; the game must be live: `active` **and** `deadline_at > now()` (a game already past its deadline is over and cannot be revived); once per game. Under the game row lock sets `deadline_at` to the new value and `deadline_extended_at = now()`; `expires_at` unchanged | `not_authenticated`, `game_not_found`, `not_host`, `game_not_active` (lobby, ended or past the deadline), `already_extended`, `invalid_deadline` (null, not later than the current deadline, or more than 1 day later) |
+| `extend_deadline(game_id uuid, deadline_at timestamptz)` | `games` row | host only; the game must be live: `active` **and** `deadline_at > now()` (a game already past its deadline is over and cannot be revived); once per game. Under the game row lock sets `deadline_at` to the new value and `deadline_extended_at = now()`; `expires_at` unchanged | `not_authenticated`, `game_not_found`, `not_host`, `game_not_active` (lobby, ended or past the deadline), `already_extended`, `invalid_deadline` (null, not later than the current deadline, or more than 24 hours later) |
 | `leave_game(game_id uuid)` | `boolean` (`true`) | any player except the host; `lobby` only. Deletes the caller's `players` row under the game lock (like `join_game`), freeing the slot and color for the next joiner. The caller is then a non-member (RLS hides the game); they may join again with the code | `not_authenticated`, `game_not_found`, `game_not_in_lobby`, `host_cannot_leave` |
 | `remove_player(game_id uuid, player_id uuid)` | `boolean` (`true`) | host only; `lobby` only. Deletes another player's row under the game lock (e.g. someone who wandered off without tapping Ready), so `start_game` is no longer blocked by them | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `not_allowed` (removing yourself), `player_not_found` (not a player of this game, e.g. already left) |
 | `play_again(game_id uuid)` | `games` row (the **new** game) | any player of the old game; the old game must be effectively ended (`ended`, or `active` past `deadline_at`). Under the old game's row lock: if `next_game_id` is set and that game still exists, returns it unchanged (one rematch per game, whoever asks; a later caller is **not** joined, they `join_game(next_join_code, …)`). Otherwise creates a lobby exactly like `create_game` without a deadline (fresh join code, `expires_at`, `deadline_at = now() + 24 h` for the host to edit in the lobby, `deadline_extended_at = null`, 25 squares) with the same `name` and `free_center`, squares copied by position (`label`, `details`, `target_count`; `current_count = 0`, nothing completed, no media; a free center that `start_game` labelled `'FREE'` goes back to blank), the caller as host and player color 0 under their `display_name` from the old game, `is_ready = false`; then sets the old row's `next_game_id` / `next_join_code` (members see it via RLS, Realtime and resync) | `not_authenticated`, `game_not_found`, `game_not_ended`, `join_code_generation_failed` (practically never) |
@@ -323,7 +329,7 @@ Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs th
 
 ### Return shapes
 
-- `games`: `id, join_code, name, host_user_id, status ('lobby'|'active'|'ended'), free_center, created_at, started_at, ended_at, deadline_at, deadline_extended_at, expires_at, next_game_id, next_join_code`. `deadline_at` is never null; `deadline_extended_at` is null until `extend_deadline`. The last two are null until `play_again` creates the rematch; `next_join_code` is that game's `join_code`, so members of the old game can join it without being able to read it (`next_game_id` is nulled if the rematch is ever deleted). The client `Game` type marks `deadline_extended_at`, `next_game_id` and `next_join_code` optional (snapshots cached by older builds lack them): read them with `?? null`.
+- `games`: `id, join_code, name, host_user_id, status ('lobby'|'active'|'ended'), free_center, created_at, started_at, ended_at, deadline_at, deadline_extended_at, expires_at, next_game_id, next_join_code, updated_at`. `updated_at` (not null, `= created_at` on insert) is stamped with `clock_timestamp()` by a `before update` trigger after the row lock, like squares, so it strictly increases with every change of the row (every RPC result carries it). `deadline_at` is never null; `deadline_extended_at` is null until `extend_deadline`. The last two are null until `play_again` creates the rematch; `next_join_code` is that game's `join_code`, so members of the old game can join it without being able to read it (`next_game_id` is nulled if the rematch is ever deleted). The client `Game` type marks `deadline_extended_at`, `next_game_id`, `next_join_code` and `updated_at` optional (snapshots cached by older builds lack them): read them with `?? null`.
 - `players`: `id, game_id, user_id, display_name, color (0–9 palette index), is_ready, joined_at`. "Me" is the row whose `user_id` equals the session user id.
 - `squares`: `id, game_id, position, label, details, target_count, current_count, completed_by_player_id (null + completed_at set = free center), completed_at (null = open), updated_at`.
 - `media`: `id, game_id, square_id, player_id, storage_path, kind ('photo'|'video'), created_at`.
@@ -377,9 +383,10 @@ Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs th
   `peek_game_public`).
 - **Realtime**: all four tables are in `supabase_realtime` with `replica identity full`. Subscribe to
   `postgres_changes` with filter `game_id=eq.<id>` (`players`, `squares`, `media`) and `id=eq.<id>`
-  (`games`); RLS decides who receives events. A square's `updated_at` strictly increases with every
-  change (stamped after the row lock), so drop any square event older than the row you hold. Deadline
-  changes (`set_deadline`, `extend_deadline`) arrive as ordinary `games` row updates.
+  (`games`); RLS decides who receives events. A square's and a game's `updated_at` strictly increase
+  with every change of the row (stamped after the row lock), so drop any square or games event (or
+  fetched row) older than the row you hold. Deadline changes (`set_deadline`, `extend_deadline`) arrive
+  as ordinary `games` row updates.
 - **Storage** (`game-media`, private, 50 MB, jpeg/png/webp/heic/mp4/quicktime/webm): object name
   `<game_id>/<position>/<uuid>.<ext>` (lower-case game id as returned by the DB). Members may upload
   while the game is active or ended and before `expires_at`, only as themselves; upload with
@@ -458,7 +465,12 @@ compiler's printer, 2-space indent) and keep the header comment.
   all four tables) plus a full resync on channel `SUBSCRIBED`, tab visible, `online` and a poll every
   `syncPollMs()` (`NEXT_PUBLIC_SYNC_POLL_MS`, default 15 s; 60 s once ended). Events and fetches merge
   through the pure reducers in `realtime.ts` (`applySquareChange`, `mergeSnapshot`, …), which drop any
-  square older than the held row by `updated_at` (`isNewerSquare`, µs precision). `syncState`:
+  square older than the held row by `updated_at` (`isNewerSquare`, µs precision). The games row (event,
+  fetch or RPC result via `applyGame`) goes through `mergeGame`: status never moves backwards and a
+  forward move always wins; for the same status the newer `updated_at` wins and an older or equal one is
+  dropped (`compareGameVersions`, µs precision), so a resync that read the game before an extension or a
+  lobby `set_deadline` committed can never undo it; a row without `updated_at` on either side (a
+  snapshot cached by an older build) falls back to the status rule alone. `syncState`:
   `live` | `syncing` (a resync > 400 ms, or the cached snapshot awaiting its first answer) | `offline`.
 - **Deadline**: every screen follows `effectiveStatus(game)` (`lib/game/types.ts`: `active` past
   `deadline_at` → `ended`). `GameScreen` re-renders the instant `deadline_at` passes (`useRerenderAt`,
@@ -469,17 +481,23 @@ compiler's printer, 2-space indent) and keep the header comment.
   reads `deadline_at` (`useDeadlineLine` in `components/board/PlayersSheet.tsx`).
 - **Deadline UI** (pure helpers in `lib/deadline/`, clocks in `useNow.ts`, all text only after mount):
   `CreateGameForm` holds the `DeadlinePicker` value (its mount `onChange` fills Tonight) and sends it as
-  `deadlineAt`. The lobby's `LobbyDeadline` line under the name (`DeadlineSummary`, "Passed" once gone)
-  has a host-only "Change" sheet whose picker only fills a draft; Save calls `setDeadline` (optimistic
-  overlay in `Lobby`, then `applyGame(row)`); a passed deadline disables Start (`LobbyDock` copy).
-  The board's `TopBar` shows `useCountdown`'s label right after the name (muted, ink under 1 h,
-  hidden under a toast; tap → Players). `BoardScreen` pushes `deadlineToast()` ("1 hour left.", tap →
-  Players) when `shouldShowDeadlineToast` says so: under an hour and not yet shown for this deadline
-  value, remembered in `bingo.deadlineToast.<gameId>`, so a reload never repeats it and an extension
-  allows one more. The host's "Extend deadline" (Players sheet, hidden once `deadline_extended_at` is
-  set) opens `ExtendDeadlineForm` (+1 h / +3 h / +24 h / custom, ≤ current + 24 h, `lib/deadline/extend.ts`)
-  → `extendDeadline`, shown at once via an overlay, reverted with inline copy on error. When the
-  clock ends a live game, `GameScreen` sends `game_ended` with `by: "auto"` from the host's phone only.
+  `deadlineAt`. A selected preset that drifts under 10 minutes away re-resolves the moment it does
+  (`useNowUntil` wakes at `tooSoonFromMs`; `refreshDriftedPreset` in `lib/deadline/drift.ts`) and the
+  picker says so in one line (`presetRefreshNotice`, "Updated to the next 3 AM — …"); the form judges
+  validity on a clock no older than the value and names any other reason Create is disabled
+  (`deadlineBlockMessage`). The lobby's `LobbyDeadline` line under the name (`DeadlineSummary`, "Passed"
+  once gone) has a host-only "Change" sheet whose picker only fills a draft; Save calls `setDeadline`
+  (optimistic overlay in `Lobby`, then `applyGame(row)`); a passed deadline disables Start (`LobbyDock`
+  copy). The board's `TopBar` shows `useCountdown`'s label right after the name (muted, ink under 1 h,
+  hidden under a toast; tap → Players); a name over 8 characters keeps a floor of about 8 characters, and
+  when that leaves too little room the countdown shows only its leading unit ("23h", never cut mid-unit).
+  `BoardScreen` pushes `deadlineToast()` ("1 hour left.", tap → Players) when `shouldShowDeadlineToast`
+  says so: under an hour and not yet shown for this deadline value, remembered in
+  `bingo.deadlineToast.<gameId>`, so a reload never repeats it and an extension allows one more. The
+  host's "Extend deadline" (Players sheet, hidden once `deadline_extended_at` is set) opens
+  `ExtendDeadlineForm` (+1 h / +3 h / +24 h / custom, ≤ current + 24 h, `lib/deadline/extend.ts`) →
+  `extendDeadline`, shown at once via an overlay, reverted with inline copy on error. When the clock ends
+  a live game, `GameScreen` sends `game_ended` with `by: "auto"` from the host's phone only.
 - **Optimistic layer**: taps go into `pendingActions.ts` (one queue per game, persisted to
   `bingo.pending.<gameId>`): one action at a time per square, squares in parallel, only while online,
   exponential backoff (≤ 30 s) on `unknown` / `not_authenticated`, any other error code is final
