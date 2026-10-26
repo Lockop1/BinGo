@@ -70,7 +70,7 @@ pre-flight checklist.
 
 1. Create the Supabase project, enable Anonymous sign-ins, copy the URL and
    keys into `.env.local`.
-2. `npx supabase link` then `npx supabase db push` (5 migrations), then deploy
+2. `npx supabase link` then `npx supabase db push` (6 migrations), then deploy
    the matching app build right after.
 3. Smoke-test on two phones against the real project (Realtime, uploads,
    signed URLs, recap) — the one thing the local stand-in cannot prove.
