@@ -3,24 +3,33 @@
 import { useState } from "react";
 import { BoardSwatch } from "@/components/board/BoardSwatch";
 import { PencilButton } from "@/components/ui/PencilButton";
+import { useCountdown } from "@/lib/deadline/useNow";
 import type { DisplaySquare } from "@/lib/game/boardState";
 import { MAX_PLAYERS, type Game, type Player } from "@/lib/game/types";
 import type { PaletteTheme } from "@/lib/palette";
 
-const deadlineFormat = new Intl.DateTimeFormat(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
-
-/** The game's deadline as "Sat 9:41 PM" in the viewer's locale and time zone. */
-export function deadlineLabel(deadlineAt: string | null): string | null {
-  if (!deadlineAt) return null;
-  const date = new Date(deadlineAt);
-  return Number.isNaN(date.getTime()) ? null : deadlineFormat.format(date);
+/**
+ * The board sheets' deadline line: "Ends tonight 3:00 AM (4h 12m)", in the
+ * phone's time zone, live (re-rendered when the countdown label changes).
+ * Null until mounted, without a deadline, and once it has passed.
+ */
+export function useDeadlineLine(deadlineAt: string | null): string | null {
+  const { countdown, describe } = useCountdown(deadlineAt);
+  if (!countdown || !describe || countdown.tier === "passed") return null;
+  // "Ends tonight 3:00 AM", like the lobby's summary line.
+  const when = describe.replace(/^(Tonight|Today|Tomorrow)\b/, (word) => word.toLowerCase());
+  return `Ends ${when} (${countdown.label})`;
 }
 
 function Tag({ children }: { children: string }) {
   return <span className="pencil-border-alt shrink-0 px-1.5 text-sm leading-5 text-ink-soft">{children}</span>;
 }
 
-/** Everyone in the game, how many squares each crossed off, and (host only) End game. */
+/**
+ * Everyone in the game, how many squares each crossed off, the deadline and
+ * (host only) Extend deadline, once, and End game. Both are enforced in SQL
+ * (`extend_deadline`, `end_game`); non-hosts never see them.
+ */
 export function PlayersSheetBody({
   game,
   players,
@@ -31,6 +40,7 @@ export function PlayersSheetBody({
   ending,
   error,
   onEndGame,
+  onExtend,
 }: {
   game: Game;
   players: Player[];
@@ -42,6 +52,8 @@ export function PlayersSheetBody({
   ending: boolean;
   error: string | null;
   onEndGame: () => void;
+  /** Opens the host's extend sheet. */
+  onExtend?: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const counts = new Map<string, number>();
@@ -49,7 +61,8 @@ export function PlayersSheetBody({
     const by = square.completed_by_player_id;
     if (by && square.completed_at) counts.set(by, (counts.get(by) ?? 0) + 1);
   }
-  const ends = deadlineLabel(game.deadline_at);
+  const ends = useDeadlineLine(game.deadline_at);
+  const extended = (game.deadline_extended_at ?? null) !== null;
 
   return (
     <div className="flex min-w-0 flex-col gap-[14px] pb-2" data-testid="players-sheet-body">
@@ -77,7 +90,7 @@ export function PlayersSheetBody({
 
       {ends ? (
         <p className="text-lg leading-7 text-ink-soft" data-testid="auto-end">
-          Ends automatically at {ends}.
+          {ends}
         </p>
       ) : null}
 
@@ -96,10 +109,22 @@ export function PlayersSheetBody({
               </div>
             </>
           ) : (
-            <PencilButton variant="secondary" onClick={() => setConfirming(true)} className="self-start" data-testid="end-game">
-              End game
-            </PencilButton>
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              {!extended && onExtend ? (
+                <PencilButton variant="secondary" onClick={onExtend} data-testid="extend-deadline">
+                  Extend deadline
+                </PencilButton>
+              ) : null}
+              <PencilButton variant="secondary" onClick={() => setConfirming(true)} data-testid="end-game">
+                End game
+              </PencilButton>
+            </div>
           )}
+          {extended && !confirming ? (
+            <p className="text-lg leading-7 text-ink-soft" data-testid="deadline-extended">
+              Deadline extended once
+            </p>
+          ) : null}
           {error ? (
             <p role="alert" className="text-lg leading-7 text-danger" data-testid="end-game-error">
               {error}

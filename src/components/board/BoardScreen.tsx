@@ -9,6 +9,8 @@ import { SettingsSheetBody } from "@/components/board/SettingsSheet";
 import { SquareSheetBody, squareTitle } from "@/components/board/SquareSheet";
 import { TopBar } from "@/components/board/TopBar";
 import { RecapStory } from "@/components/recap/RecapStory";
+import { ExtendDeadlineForm } from "@/components/deadline/ExtendDeadlineForm";
+import { useCountdown } from "@/lib/deadline/useNow";
 import { track } from "@/lib/analytics";
 import { buildRecapItems, recapFileNames, type RecapItem } from "@/components/recap/recapItems";
 import { Sheet } from "@/components/ui/Sheet";
@@ -18,9 +20,18 @@ import { diffBoards, type BoardEvent, type DisplaySquare } from "@/lib/game/boar
 import { createCelebrationQueue, createCelebrationTracker } from "@/lib/game/celebrations";
 import { GAME_ERROR_COPY, errorCopy } from "@/lib/game/errors";
 import { isGameOverError, type Settled } from "@/lib/game/pendingActions";
-import { endGame } from "@/lib/game/rpc";
+import { endGame, extendDeadline } from "@/lib/game/rpc";
 import { timestampMicros } from "@/lib/game/realtime";
-import { createToastQueue, mediaToasts, type Toast, type ToastInput } from "@/lib/game/toasts";
+import {
+  createToastQueue,
+  deadlineToast,
+  mediaToasts,
+  noteDeadlineToastShown,
+  readDeadlineToastShown,
+  shouldShowDeadlineToast,
+  type Toast,
+  type ToastInput,
+} from "@/lib/game/toasts";
 import type { Game, Media, Player, Square } from "@/lib/game/types";
 import { useBoardState } from "@/lib/game/useBoardState";
 import type { SyncState } from "@/lib/game/useGame";
@@ -48,7 +59,15 @@ export type BoardScreenProps = {
   applySquare: (row: Square) => void;
 };
 
-type SheetState = { kind: "square"; position: number } | { kind: "players" } | { kind: "settings" } | { kind: "album" };
+type SheetState =
+  | { kind: "square"; position: number }
+  | { kind: "players" }
+  | { kind: "settings" }
+  | { kind: "album" }
+  | { kind: "extend" };
+
+/** The host's extension as shown before `extend_deadline` answers. */
+type ExtendOverlay = { deadline_at: string; deadline_extended_at: string; seq: number };
 
 /** The live album as it was when opened, in board order (new uploads don't shift an open story). */
 type StoryState = { items: RecapItem[]; names: string[]; startIndex: number };
@@ -208,14 +227,43 @@ export function BoardScreen({
     for (const t of news) toasts.push(t);
   }, [media, players, squares, meId, toasts, catchingUp]);
 
+  // The host's extension shows at once (countdown, sheets); the returned row then takes over.
+  const [extendOverlay, setExtendOverlay] = useState<ExtendOverlay | null>(null);
+  const shownGame = useMemo(
+    () =>
+      extendOverlay
+        ? { ...game, deadline_at: extendOverlay.deadline_at, deadline_extended_at: extendOverlay.deadline_extended_at }
+        : game,
+    [game, extendOverlay],
+  );
+
+  // "1 hour left.": once per phone per deadline value (bingo.deadlineToast.<gameId>), when the
+  // countdown first drops under an hour, or on load if it already has. The clock ticks when the
+  // countdown label changes, so the crossing is seen within seconds.
+  const deadlineClock = useCountdown(shownGame.deadline_at).now;
+  useEffect(() => {
+    if (!deadlineClock) return;
+    const deadlineAt = shownGame.deadline_at;
+    if (!shouldShowDeadlineToast(readDeadlineToastShown(game.id), deadlineAt, deadlineClock)) return;
+    noteDeadlineToastShown(game.id, deadlineAt);
+    toasts.push(deadlineToast());
+  }, [deadlineClock, shownGame.deadline_at, game.id, toasts]);
+
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const sheetOpenRef = useRef(false);
+  useEffect(() => {
+    sheetOpenRef.current = sheetOpen;
+  }, [sheetOpen]);
+  // Players → Extend: the players sheet closes first, the extend sheet opens once it is gone.
+  const sheetAfterClose = useRef<SheetState | null>(null);
   const [story, setStory] = useState<StoryState | null>(null);
   // A thumbnail tap closes the square sheet first and opens the story once the
   // sheet is gone, so the two never fight over focus, Escape or scroll lock.
   const storyAfterSheet = useRef<StoryState | null>(null);
   const openSheet = (next: SheetState) => {
     storyAfterSheet.current = null;
+    sheetAfterClose.current = null;
     setSheet(next);
     setSheetOpen(true);
   };
@@ -255,13 +303,55 @@ export function BoardScreen({
     try {
       // Status becomes ended: GameScreen swaps the board for the recap.
       const ended = await endGame({ game_id: game.id });
-      track("game_ended", endedProps(board, players.length, ended));
+      track("game_ended", endedProps(board, players.length, ended, "host"));
       applyGame(ended);
     } catch (error) {
       setEndError(errorCopy(error));
       void refresh();
     } finally {
       setEnding(false);
+    }
+  };
+
+  const [extendError, setExtendError] = useState<string | null>(null);
+  const [extendRetry, setExtendRetry] = useState<string | null>(null);
+  const [extendKey, setExtendKey] = useState(0);
+  const extendSeq = useRef(0);
+  const openExtend = () => {
+    setExtendError(null);
+    setExtendRetry(null);
+    sheetAfterClose.current = { kind: "extend" };
+    setSheetOpen(false);
+  };
+  const onPlayersSheetGone = () => {
+    const next = sheetAfterClose.current;
+    sheetAfterClose.current = null;
+    if (!next) return;
+    setExtendKey((k) => k + 1);
+    openSheet(next);
+  };
+  // Host only (extend_deadline enforces host, live, once and the 1-day cap): optimistic, then reconciled.
+  const saveExtension = async (iso: string) => {
+    const id = ++extendSeq.current;
+    setExtendOverlay({ deadline_at: iso, deadline_extended_at: new Date().toISOString(), seq: id });
+    setExtendError(null);
+    setSheetOpen(false);
+    try {
+      applyGame(await extendDeadline(game.id, iso));
+    } catch (error) {
+      const message = errorCopy(error);
+      void refresh();
+      if (sheetOpenRef.current) {
+        toasts.push({ text: message, tone: "error" });
+      } else {
+        // Give the choice back with the reason.
+        setExtendError(message);
+        setExtendRetry(iso);
+        setExtendKey((k) => k + 1);
+        openSheet({ kind: "extend" });
+      }
+    } finally {
+      setExtendOverlay((o) => (o?.seq === id ? null : o));
     }
   };
 
@@ -272,7 +362,8 @@ export function BoardScreen({
 
   const onToast = (t: Toast) => {
     toasts.dismiss(t.id);
-    if (t.position !== null) openSheet({ kind: "square", position: t.position });
+    if (t.target === "players") openSheet({ kind: "players" });
+    else if (t.position !== null) openSheet({ kind: "square", position: t.position });
   };
 
   return (
@@ -302,6 +393,7 @@ export function BoardScreen({
         }}
         toast={toast}
         onToast={onToast}
+        deadlineAt={shownGame.deadline_at}
       />
 
       <div className="flex min-w-0 flex-1 flex-col items-center pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.375rem,env(safe-area-inset-left))] pr-[max(0.375rem,env(safe-area-inset-right))] pt-2">
@@ -362,9 +454,15 @@ export function BoardScreen({
         ) : null}
       </Sheet>
 
-      <Sheet open={sheetOpen && sheet?.kind === "players"} onClose={closeSheet} title="Players" testId="players-sheet">
+      <Sheet
+        open={sheetOpen && sheet?.kind === "players"}
+        onClose={closeSheet}
+        title="Players"
+        testId="players-sheet"
+        onExitComplete={onPlayersSheetGone}
+      >
         <PlayersSheetBody
-          game={game}
+          game={shownGame}
           players={players}
           board={board}
           meId={meId}
@@ -373,6 +471,7 @@ export function BoardScreen({
           ending={ending}
           error={endError}
           onEndGame={() => void endTheGame()}
+          onExtend={isHost ? openExtend : undefined}
         />
         {/* Home on purpose: `/` stays home (with a "Back to your game" row) instead of jumping back here.
             The sheet closes first: the router keeps this screen's state for the way back. */}
@@ -391,11 +490,26 @@ export function BoardScreen({
 
       <Sheet open={sheetOpen && sheet?.kind === "settings"} onClose={closeSheet} title="Settings" testId="settings-sheet">
         <SettingsSheetBody
-          game={game}
+          game={shownGame}
           settings={settings}
           theme={theme}
           systemTheme={systemTheme}
           onChange={updateSettings}
+        />
+      </Sheet>
+
+      <Sheet
+        open={sheetOpen && sheet?.kind === "extend" && isHost}
+        onClose={closeSheet}
+        title="Extend deadline"
+        testId="extend-sheet"
+      >
+        <ExtendDeadlineForm
+          key={extendKey}
+          currentIso={game.deadline_at}
+          initialIso={extendRetry}
+          error={extendError}
+          onSave={(iso) => void saveExtension(iso)}
         />
       </Sheet>
 
@@ -418,10 +532,20 @@ export function BoardScreen({
   );
 }
 
-/** `game_ended` analytics: counts only (see lib/analytics.ts). */
-function endedProps(board: DisplaySquare[], playerCount: number, game: Game) {
+/**
+ * `game_ended` analytics: counts only (see lib/analytics.ts). `by: "auto"` is
+ * the deadline passing (sent from the host's phone by GameScreen); such a game
+ * ends at its `deadline_at`.
+ */
+export function endedProps(
+  board: readonly { position: number; completed_at: string | null }[],
+  playerCount: number,
+  game: Game,
+  by: "host" | "auto",
+) {
   const started = game.started_at ? Date.parse(game.started_at) : NaN;
-  const ended = game.ended_at ? Date.parse(game.ended_at) : Date.now();
+  const endedAt = game.ended_at ?? (by === "auto" ? game.deadline_at : null);
+  const ended = endedAt ? Date.parse(endedAt) : Date.now();
   const minutes = (ended - started) / 60_000;
   return {
     squares_completed: board.filter((s) => s.completed_at !== null).length,
@@ -429,7 +553,7 @@ function endedProps(board: DisplaySquare[], playerCount: number, game: Game) {
     blackout: isBlackout(board),
     duration_min: Number.isFinite(minutes) ? Math.max(0, Math.round(minutes)) : 0,
     player_count: playerCount,
-    by: "host",
+    by,
   };
 }
 

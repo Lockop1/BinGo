@@ -2,7 +2,7 @@
 
 import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { BoardScreen } from "@/components/board/BoardScreen";
+import { BoardScreen, endedProps } from "@/components/board/BoardScreen";
 import { StartTransition, type StartSquare } from "@/components/game/StartTransition";
 import { NotFound } from "@/components/join/JoinScreen";
 import { Lobby } from "@/components/lobby/Lobby";
@@ -15,6 +15,7 @@ import { Recap } from "@/components/recap/Recap";
 import { RecapViewedTracker } from "@/components/providers/RecapViewedTracker";
 import { PencilButton, PencilLink, pencilButtonClass } from "@/components/ui/PencilButton";
 import { SkeletonLines } from "@/components/ui/Skeleton";
+import { track } from "@/lib/analytics";
 import {
   SAVE_DEBOUNCE_MS,
   clearActiveGame,
@@ -222,6 +223,29 @@ function useActiveGameRecord(
   }, [gameId, notFound, status, confirmed]);
 }
 
+/**
+ * `game_ended` with `by: "auto"`, sent once from the host's phone only, when
+ * this screen sees the deadline flip a live game to ended (the server row still
+ * says `active`: the clock did it, not `end_game`, which the board tracks
+ * itself as `by: "host"`). Same counts as the host-ended path.
+ */
+function useAutoEndAnalytics(result: UseGameResult, status: GameStatus | null) {
+  const before = useRef<GameStatus | null>(null);
+  const sent = useRef(false);
+  const game = result.status === "ready" ? result.game : null;
+  const squares = result.status === "ready" ? result.squares : null;
+  const playerCount = result.status === "ready" ? result.players.length : 0;
+  const isHost = game !== null && result.me !== null && result.me.user_id === game.host_user_id;
+  useEffect(() => {
+    const previous = before.current;
+    before.current = status;
+    if (sent.current || !game || !squares || !isHost) return;
+    if (previous !== "active" || status !== "ended" || game.status !== "active") return;
+    sent.current = true;
+    track("game_ended", endedProps(squares, playerCount, game, "auto"));
+  }, [status, game, squares, playerCount, isHost]);
+}
+
 function squareLabel(squares: readonly Square[], position: number): string {
   const label = squares.find((s) => s.position === position)?.label.trim();
   return label || `square ${position + 1}`;
@@ -383,6 +407,7 @@ function GameView({
     (result.status === "ready" && result.confirmed && sessionReady && wasMember && result.me === null);
 
   useActiveGameRecord(gameId, result, liveStatus, cached, userId, removed);
+  useAutoEndAnalytics(result, liveStatus);
 
   const notice = (
     <DroppedNotice

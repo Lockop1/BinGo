@@ -7,7 +7,8 @@ const DOCK_BUTTON = "px-2! text-xl min-[360px]:px-3! min-[360px]:text-2xl";
 
 /**
  * Bottom-anchored actions within thumb reach: my Ready toggle and, for the
- * host, Start game (enabled only when every player is ready).
+ * host, Start game (enabled only when every player is ready and the deadline
+ * is still ahead; `start_game` refuses a passed one with `deadline_passed`).
  */
 export function LobbyDock({
   ready,
@@ -16,6 +17,8 @@ export function LobbyDock({
   isHost,
   hostName,
   allReady,
+  deadlinePassed = false,
+  deadlinePending = false,
   readyCount,
   playerCount,
   startBusy,
@@ -28,17 +31,22 @@ export function LobbyDock({
   isHost: boolean;
   hostName: string;
   allReady: boolean;
+  /** The deadline has gone by: the host must pick a new one before starting. */
+  deadlinePassed?: boolean;
+  /** The host's new deadline has not been confirmed yet. */
+  deadlinePending?: boolean;
   readyCount: number;
   playerCount: number;
   startBusy: boolean;
   onStart: () => void;
   error: string | null;
 }) {
-  const status = isHost
-    ? allReady
-      ? "Everyone's ready. Start when you are."
-      : `${readyCount} of ${playerCount} ready. Start unlocks when everyone is.`
-    : `Waiting for ${hostName || "the host"} to start`;
+  const host = hostName || "the host";
+  let status: string;
+  if (deadlinePassed) status = isHost ? "Pick a new deadline first" : `Waiting for ${host} to set a new deadline`;
+  else if (!isHost) status = `Waiting for ${host} to start`;
+  else if (allReady) status = "Everyone's ready. Start when you are.";
+  else status = `${readyCount} of ${playerCount} ready. Start unlocks when everyone is.`;
 
   return (
     <div className="lobby-dock fixed inset-x-0 bottom-0 z-30 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[calc(var(--margin-x)+12px)] pr-4 pt-2">
@@ -66,7 +74,7 @@ export function LobbyDock({
           {isHost ? (
             <PencilButton
               onClick={onStart}
-              disabled={!allReady}
+              disabled={!allReady || deadlinePassed || deadlinePending}
               busy={startBusy}
               data-testid="start-game"
               className={`min-h-14 min-w-0 flex-1 whitespace-nowrap ${DOCK_BUTTON}`}

@@ -255,26 +255,35 @@ export type DeadlineSummaryProps = {
   now?: Date;
   timeZone?: string;
   className?: string;
+  /** What the line says once the deadline has passed (default "Ended"; the lobby says "Passed"). */
+  passedText?: string;
 };
 
 /**
- * One line, "Ends Sun 11:59 PM · 2d 4h" ("Ended" once passed), for the lobby
+ * One line, "Ends Sun 11:59 PM · 2d 4h" (`passedText`, "Ended", once passed), for the lobby
  * and the board. Renders nothing without a deadline, and an empty span until
  * mounted (hydration-safe). `data-tier` carries the countdown tier and
  * `data-urgent` is set under one hour, for styling by the caller.
  */
-export function DeadlineSummary({ deadlineIso, now: nowProp, timeZone, className }: DeadlineSummaryProps) {
+export function DeadlineSummary({
+  deadlineIso,
+  now: nowProp,
+  timeZone,
+  className,
+  passedText = "Ended",
+}: DeadlineSummaryProps) {
   const hydrated = useHydrated();
   const live = useCountdown(deadlineIso, timeZone);
   const zone = useMemo(() => resolveTimeZone(timeZone), [timeZone]);
   const deadline = fromIso(deadlineIso);
   if (!deadline) return null;
   const now = hydrated ? (nowProp ?? live.now) : null;
-  const text = now ? deadlineSummaryText(deadline, now, zone) : "";
+  const tier = now ? countdown(deadline, now).tier : undefined;
+  const text = !now ? "" : tier === "passed" ? passedText : deadlineSummaryText(deadline, now, zone);
   return (
     <span
       data-testid="deadline-summary"
-      data-tier={now ? countdown(deadline, now).tier : undefined}
+      data-tier={tier}
       data-urgent={now && isUnderOneHour(deadline, now) ? "true" : undefined}
       className={className}
     >

@@ -3,6 +3,8 @@
 import { Images, Settings } from "lucide-react";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Toasts } from "@/components/board/Toasts";
+import { isUnderOneHour } from "@/lib/deadline/format";
+import { useCountdown } from "@/lib/deadline/useNow";
 import type { Toast } from "@/lib/game/toasts";
 import type { Player } from "@/lib/game/types";
 import type { SyncState } from "@/lib/game/useGame";
@@ -68,7 +70,38 @@ const isOnline = () => navigator.onLine;
 const assumeOnline = () => true;
 
 /**
- * The only thing above the grid: game name, a quiet sync mark (see SyncMark),
+ * "4h 12m" right after the game name: small, muted, the sync mark's type size.
+ * Under an hour it takes the board's ink color (`data-urgent`), still small.
+ * Renders nothing until mounted (hydration-safe) and once the deadline has
+ * passed (the game screen moves to the recap then). Tapping it opens Players,
+ * where the deadline line and the host's Extend live.
+ */
+function DeadlineCountdown({ deadlineAt, hidden, onTap }: { deadlineAt: string | null; hidden: boolean; onTap: () => void }) {
+  const { now, countdown } = useCountdown(deadlineAt);
+  if (!now || !countdown || countdown.tier === "passed" || !deadlineAt) return null;
+  const urgent = isUnderOneHour(new Date(deadlineAt), now);
+  return (
+    <button
+      type="button"
+      onClick={onTap}
+      tabIndex={hidden ? -1 : undefined}
+      aria-hidden={hidden || undefined}
+      aria-label={`Time left: ${countdown.label}. Players`}
+      data-testid="deadline-countdown"
+      data-tier={countdown.tier}
+      data-urgent={urgent ? "true" : undefined}
+      className={`inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center px-1 font-sans text-base whitespace-nowrap tabular-nums transition-opacity duration-200 motion-reduce:transition-none ${
+        urgent ? "text-board-ink" : "text-board-muted"
+      } ${hidden ? "pointer-events-none opacity-0" : "opacity-100"}`}
+    >
+      {countdown.label}
+    </button>
+  );
+}
+
+/**
+ * The only thing above the grid: game name, a quiet countdown to the deadline
+ * (see DeadlineCountdown), a quiet sync mark (see SyncMark),
  * players, settings, album (with a small count once there is media). A toast
  * takes the game name's place while it shows (see Toasts); nothing else moves.
  *
@@ -90,6 +123,7 @@ export function TopBar({
   onRetry,
   toast = null,
   onToast,
+  deadlineAt = null,
 }: {
   name: string;
   players: Player[];
@@ -105,6 +139,8 @@ export function TopBar({
   /** The toast showing now (it covers the title), if any. */
   toast?: Toast | null;
   onToast?: (toast: Toast) => void;
+  /** The game's `deadline_at`, counted down after the name. */
+  deadlineAt?: string | null;
 }) {
   const dots = players.slice(0, 4);
   const names = useMemo(() => players.map((p) => p.display_name), [players]);
@@ -117,13 +153,15 @@ export function TopBar({
       {/* Centre slot: the title, or the current toast over it (same box, so no layout shift). */}
       <div className="relative flex min-w-0 flex-1 items-center self-stretch">
         <h1
-          className={`min-w-0 flex-1 truncate font-board text-xl leading-tight transition-opacity duration-200 motion-reduce:transition-none ${
+          className={`min-w-0 truncate font-board text-xl leading-tight transition-opacity duration-200 motion-reduce:transition-none ${
             toast ? "opacity-0" : "opacity-100"
           }`}
           data-testid="board-title"
         >
           {name}
         </h1>
+        <DeadlineCountdown deadlineAt={deadlineAt} hidden={toast !== null} onTap={onPlayers} />
+        <span aria-hidden className="flex-1" />
         <Toasts toast={toast} theme={theme} names={names} onTap={(t) => onToast?.(t)} />
       </div>
 

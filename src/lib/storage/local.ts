@@ -21,6 +21,8 @@ type LocalSchema = {
   [key: `bingo.celebrated.${string}`]: string[];
   /** This phone's square actions for a game not yet confirmed by the server (validated item by item on read). */
   [key: `bingo.pending.${string}`]: PendingAction[];
+  /** The deadline (ISO) this phone last showed the "1 hour left." toast for, per game (see lib/game/toasts). */
+  [key: `bingo.deadlineToast.${string}`]: string;
 };
 
 export type LocalKey = keyof LocalSchema;

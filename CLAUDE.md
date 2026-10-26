@@ -465,8 +465,21 @@ compiler's printer, 2-space indent) and keep the header comment.
   re-armed when an extension arrives), so every phone moves to the recap on time without waiting for
   the cron or the server. Wrappers in `lib/game/rpc.ts`: `createGame({ …, deadlineAt })` (ISO string;
   `null` = server default, 24 h), `setDeadline(gameId, deadlineAt)` (lobby),
-  `extendDeadline(gameId, deadlineAt)` (live, once). The board sheets' "Ends automatically at …" line
-  reads `deadline_at` (`deadlineLabel` in `components/board/PlayersSheet.tsx`).
+  `extendDeadline(gameId, deadlineAt)` (live, once). The board sheets' "Ends <when> (<left>)" line
+  reads `deadline_at` (`useDeadlineLine` in `components/board/PlayersSheet.tsx`).
+- **Deadline UI** (pure helpers in `lib/deadline/`, clocks in `useNow.ts`, all text only after mount):
+  `CreateGameForm` holds the `DeadlinePicker` value (its mount `onChange` fills Tonight) and sends it as
+  `deadlineAt`. The lobby's `LobbyDeadline` line under the name (`DeadlineSummary`, "Passed" once gone)
+  has a host-only "Change" sheet whose picker only fills a draft; Save calls `setDeadline` (optimistic
+  overlay in `Lobby`, then `applyGame(row)`); a passed deadline disables Start (`LobbyDock` copy).
+  The board's `TopBar` shows `useCountdown`'s label right after the name (muted, ink under 1 h,
+  hidden under a toast; tap → Players). `BoardScreen` pushes `deadlineToast()` ("1 hour left.", tap →
+  Players) when `shouldShowDeadlineToast` says so: under an hour and not yet shown for this deadline
+  value, remembered in `bingo.deadlineToast.<gameId>`, so a reload never repeats it and an extension
+  allows one more. The host's "Extend deadline" (Players sheet, hidden once `deadline_extended_at` is
+  set) opens `ExtendDeadlineForm` (+1 h / +3 h / +24 h / custom, ≤ current + 24 h, `lib/deadline/extend.ts`)
+  → `extendDeadline`, shown at once via an overlay, reverted with inline copy on error. When the
+  clock ends a live game, `GameScreen` sends `game_ended` with `by: "auto"` from the host's phone only.
 - **Optimistic layer**: taps go into `pendingActions.ts` (one queue per game, persisted to
   `bingo.pending.<gameId>`): one action at a time per square, squares in parallel, only while online,
   exponential backoff (≤ 30 s) on `unknown` / `not_authenticated`, any other error code is final

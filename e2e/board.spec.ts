@@ -228,7 +228,7 @@ test("live board: cross-off, toasts, bingo once, undo, counters, offline, end ga
   await friend.getByTestId("players-button").click();
   await expect(friend.getByTestId("players-sheet")).toBeVisible();
   await expect(friend.getByTestId("board-player")).toHaveCount(2);
-  await expect(friend.getByTestId("auto-end")).toContainText("Ends automatically at");
+  await expect(friend.getByTestId("auto-end")).toContainText(/^Ends .+ \(.+\)$/);
   await expect(friend.getByTestId("end-game")).toHaveCount(0);
   await friend.keyboard.press("Escape");
   await expect(friend.getByTestId("players-sheet")).toBeHidden();
@@ -236,7 +236,7 @@ test("live board: cross-off, toasts, bingo once, undo, counters, offline, end ga
   await host.getByTestId("players-button").click();
   await expect(host.getByTestId("board-player").filter({ hasText: "Hosty" })).toContainText("you");
   await expect(host.getByTestId("board-player").filter({ hasText: "Hosty" })).toContainText("host");
-  await expect(host.getByTestId("auto-end")).toContainText("Ends automatically at");
+  await expect(host.getByTestId("auto-end")).toContainText(/^Ends .+ \(.+\)$/);
   await host.getByTestId("end-game").click();
   await host.getByTestId("end-game-confirm").click();
 

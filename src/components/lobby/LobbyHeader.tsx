@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { Flag, LogOut } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { SyncDot } from "@/components/lobby/SyncDot";
 import { PencilButton } from "@/components/ui/PencilButton";
 import { leaveToHome } from "@/lib/game/activeGame";
@@ -29,6 +29,7 @@ export function LobbyHeader({
   syncState,
   onResync,
   applyGame,
+  deadline = null,
 }: {
   gameId: string;
   name: string;
@@ -36,6 +37,8 @@ export function LobbyHeader({
   syncState: SyncState;
   onResync: () => void;
   applyGame: (row: Game) => void;
+  /** The deadline line, shown right under the game name. */
+  deadline?: ReactNode;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -140,6 +143,7 @@ export function LobbyHeader({
       <h1 className="font-pencil text-4xl leading-[56px] tracking-wide break-words" data-testid="lobby-title">
         {name}
       </h1>
+      {deadline}
       <p className="text-lg leading-7 text-ink-soft">Lobby · fill the board together, then tap Ready.</p>
     </header>
   );

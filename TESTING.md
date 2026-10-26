@@ -33,9 +33,10 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
      that Anonymous sign-ins is on in Supabase and that `NEXT_PUBLIC_SUPABASE_URL` / `_ANON_KEY` are set in Vercel (env vars).
      Many test sign-ins from one Wi-Fi can also hit Supabase's hourly anonymous sign-in limit.
 2. **Phone A:** tap "New game". Enter **Friday Test** under "Game name". Under "Starter squares", leave "Night Out"
-   selected. Leave "Free space in the middle" ticked. Enter **Alex** under "Your name". Tap "Create game".
-   - [ ] The button reads "Creating…", then the lined-paper lobby opens with the title **Friday Test** and
-     "Lobby · fill the board together, then tap Ready."
+   selected. Leave "Free space in the middle" ticked. Under "Game ends", tap "24 hours" (each row shows its time;
+   "Tonight (3 AM)" is preselected). Enter **Alex** under "Your name". Tap "Create game".
+   - [ ] The button reads "Creating…", then the lined-paper lobby opens with the title **Friday Test**,
+     "Ends tomorrow <time> · 23h 59m" under it, and "Lobby · fill the board together, then tap Ready."
    - [ ] "Invite code" shows 8 characters in two groups. "The board" shows "Sing on stage at karaoke" in the
      top-left square and "FREE" in the center.
    - If it fails → "Something went wrong. Check your connection and try again." usually means the migrations
@@ -95,10 +96,18 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
    - [ ] **Phone B:** within about a second (up to 15 s) you see "You're no longer in this game" with "Join again"
      and "Home" buttons. Tap "Join again", then "Join". You are back in the lobby.
    - If it fails → if B is still in the lobby after 15 s, the refresh isn't running or RLS still shows B the game.
-6. **Phone A:** look at the bottom of the screen.
+6. Deadline. **Phone B:** the line under the title reads "Ends tomorrow <time> · 23h <n>m", with no "Change".
+   **Phone A (host):** tap "Change" next to it. In the "Game ends" sheet, tap "This weekend (Sunday 11:59 PM)", then "Save".
+   - [ ] Both read "Ends Sun 11:59 PM · <time left>" ("tomorrow"/"tonight" on Sat/Sun; B within about a second).
+   - Optional (10 minutes): "Change" → "Custom", pick a time 10 minutes ahead, "Save", and wait. The line reads "Passed",
+     Start greys out with "Pick a new deadline first", and Phone B reads "Waiting for Alex to set a new deadline".
+   - **Phone A:** "Change" → "24 hours" → "Save" before going on.
+   - If it fails → "Pick a time between 10 minutes and 7 days from now." means the phone's clock is far off.
+     If Phone B never updates, check the Realtime publication (`games`).
+7. **Phone A:** look at the bottom of the screen.
    - [ ] "Start game" is greyed out, and the line above it reads "0 of 2 ready. Start unlocks when everyone is."
      **Phone B** reads "Waiting for Alex to start".
-7. **Both phones:** tap "I'm ready". The button changes to "Not ready".
+8. **Both phones:** tap "I'm ready". The button changes to "Not ready".
    - [ ] After A's tap only: "1 of 2 ready…" and Start is still disabled. After both: "Everyone's ready. Start when you are."
      The header shows "2 ready" and each name has a pencil check.
    - If it fails → if Start stays disabled after both are ready, Phone A isn't getting `players` changes (Realtime publication).
@@ -110,8 +119,8 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
      within about a second of A (up to 15 s).
    - [ ] **Phone A (dark mode):** near-black board with bold, condensed lettering ("Dark Scoreboard").
      **Phone B (light mode):** white board with marker writing ("Whiteboard").
-   - [ ] The top bar shows **Friday Test**, colored player dots with "2", a gear icon and a photos icon. Under the
-     board: "1 of 25 crossed off" (the free center).
+   - [ ] The top bar shows **Friday Test**, then a small grey "23h <n>m", colored player dots with "2", a gear icon
+     and a photos icon. Under the board: "1 of 25 crossed off" (the free center).
    - If it fails → an error under the buttons such as "Everyone needs to tap Ready first." means someone isn't ready.
      If Phone B stays in the lobby for more than 15 s, check the Realtime publication and RLS.
 
@@ -166,6 +175,13 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
     - Turn the network back on.
     - [ ] Within a few seconds "offline" disappears. Phone A crosses it off with "Jamie got Stranger takes our group photo".
     - If it fails → if the square flips back, or Phone A never gets it, note it as a reconnect bug.
+11. **Phone B:** tap the small "23h <n>m" after the game name.
+    - [ ] The "Players" sheet opens with "Ends tomorrow <time> (23h <n>m)". There is no "Extend deadline". Close it.
+12. Extend once. **Phone A (host):** open the "Players" sheet, tap "Extend deadline", leave "+1 hour" and tap "Save".
+    - [ ] Both small countdowns change from "23h <n>m" to "1d" (Phone B within about a second). Phone A's sheet
+      now reads "Deadline extended once" instead of the button.
+    - If it fails → "The deadline can only be extended once." on a first try, or "Only the host can do that.",
+      means the `game_deadline` migration isn't pushed (HUMAN_STEPS.md §2).
 
 ## 7. Bingo
 
@@ -200,7 +216,7 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
 ## 9. End the game and the recap
 
 1. **Phone B (friend):** tap the player dots in the top bar. The "Players" sheet shows "2/10 playing", each player's
-   "<n> squares" and "Ends automatically at <time>". There is no "End game" button. Close the sheet.
+   "<n> squares" and "Ends <when> (<time left>)". There is no "End game" button. Close the sheet.
    **Phone A (host):** open the same sheet and tap "End game".
    - [ ] "End the game for everyone? The board locks and the album opens." with "End game" / "Keep playing".
      Tap "End game".
@@ -257,13 +273,22 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
    - [ ] The latest run returned 200. Its log line reads `[cron/cleanup] ended=… expired=… deletedGames=… … errors=0`.
    - If it fails → a 401 means `CRON_SECRET` is missing or wrong. A 500 means `CRON_SECRET` or `SUPABASE_SERVICE_ROLE_KEY`
      is unset (env vars).
-2. Only if you left a game "Live": 24 h after it started, it shows "Ended" under "Your games".
+2. Only if you left a game "Live": after its deadline, it shows "Ended" under "Your games".
+
+## 14. Auto-end at the deadline (optional, 15 minutes)
+
+1. **Phone A:** create a new game with "Game ends" → "Custom", 15 minutes ahead. Phone B joins, both tap
+   "I'm ready", Phone A starts it.
+   - [ ] Under an hour left, so each phone shows "1 hour left." once in the top bar (tapping it opens "Players").
+     A reload doesn't show it again. The small countdown reads "<n>m" and counts down.
+   - [ ] At the deadline, **both phones** switch to "Night recap" on their own (no one taps anything).
+   - If it fails → a phone that stays on the board after the deadline had its clock off; note the phone's time.
 
 ## Expected NOT to work (not bugs)
 
 - No vibration on iPhone. Safari has no vibration support.
 - "Download all" makes a zip, which is clunky to open on iPhone. Use per-photo "Save" instead.
-- No host transfer: the host can't leave a lobby (only "End game"). If the host's phone dies, the game auto-ends after 24 h.
+- No host transfer: the host can't leave a lobby (only "End game"). If the host's phone dies, the game ends at its deadline.
 - No accounts: "Your games" lives on one phone and one browser. Clearing browser data or switching phones loses it.
   On iPhone, Safari may also clear it after about 7 days of not opening the app.
 - Link previews are cached by chat apps. An old card can keep showing an old player count.
@@ -276,11 +301,13 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
 | 2 Share + card | A | | |
 | 3 Join / not found | B | | |
 | 4 Lobby edits, counter, free space | A + B | | |
+| 4 Deadline change / Passed | A + B | | |
 | 4 Leave / Remove / Ready | A + B | | |
 | 5 Start + themes | A + B | | |
 | 6 Hold, confirm, counter, undo | A + B | | |
 | 6 Photo, long video, share | B | | |
 | 6 Settings, offline completion | B | | |
+| 6 Countdown, extend once | A + B | | |
 | 7 Bingo once, reload | A + B | | |
 | 8 Instant return, offline open | B | | |
 | 9 End, recap, save, ended link | A + B | | |
@@ -288,5 +315,6 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
 | 11 Your games | A + B | | |
 | 12 Analytics | | | |
 | 13 Cleanup job | | | |
+| 14 Auto-end | A + B | | |
 
 Phones used (model, OS, browser): A ______________________ B ______________________ Date: __________
