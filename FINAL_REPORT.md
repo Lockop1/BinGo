@@ -74,6 +74,25 @@ its deadline as a backstop. The database owns the rules (`games.deadline_at`,
 `set_deadline`, `extend_deadline`, `start_game` refusing a passed deadline); the 30-day
 album expiry still counts from creation.
 
+## Playtest fixes, round 1
+
+- **Home "Join game"**: a code field under New game that normalises the code, checks it and
+  shows not-found / full / ended copy inline before routing to the join screen.
+- **Lobby**: the game name is a real pencil title with the deadline beneath; the free-space
+  toggle lives only on the Create screen.
+- **Shared start countdown**: `start_game` sets a server `countdown_ends_at` five seconds out;
+  every phone counts down to it (pencil-sketched 5-4-3-2-1 with a buzz per tick), completions are
+  refused server-side until then, and late openers skip it.
+- **Host controls in Settings**: Extend deadline and End game sit in a Host section at the top
+  of the settings sheet; no new board buttons.
+- **Blackout auto-end**: the 25th square ends the game inside the same transaction with
+  `end_reason = 'blackout'` (host and deadline ends are recorded too); a marquee-bulb BLACKOUT
+  sequence, then a credits card (name, date, players in their colors, squares completed) leads
+  into the recap; host/deadline ends get a short buzzer intro. Reduced motion gets fades.
+- **Post-game media**: uploads keep working after the end for the uploader's own squares (any
+  square within ten minutes of the end, so in-flight blackout photos land); the recap lists
+  "Your squares" with Add photo/video.
+
 ## Live URL
 
 None yet. The sandbox could not reach Supabase or Vercel, so nothing is
@@ -84,7 +103,7 @@ pre-flight checklist.
 
 1. Create the Supabase project, enable Anonymous sign-ins, copy the URL and
    keys into `.env.local`.
-2. `npx supabase link` then `npx supabase db push` (7 migrations), then deploy
+2. `npx supabase link` then `npx supabase db push` (8 migrations), then deploy
    the matching app build right after.
 3. Smoke-test on two phones against the real project (Realtime, uploads,
    signed URLs, recap) — the one thing the local stand-in cannot prove.
