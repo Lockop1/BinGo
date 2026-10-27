@@ -150,7 +150,6 @@ export function LobbyHeader({
       </h1>
       <div className="mt-[7px] flex min-w-0 flex-col">
         {deadline}
-        <p className="text-lg leading-7 text-ink-soft">Lobby · fill the board together, then tap Ready.</p>
       </div>
       <PencilRule />
     </header>

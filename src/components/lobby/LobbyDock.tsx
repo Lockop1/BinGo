@@ -46,7 +46,7 @@ export function LobbyDock({
   if (deadlinePassed) status = isHost ? "Pick a new deadline first" : `Waiting for ${host} to set a new deadline`;
   else if (!isHost) status = `Waiting for ${host} to start`;
   else if (allReady) status = "Everyone's ready. Start when you are.";
-  else status = `${readyCount} of ${playerCount} ready. Start unlocks when everyone is.`;
+  else status = `${readyCount} of ${playerCount} ready.`;
 
   return (
     <div className="lobby-dock fixed inset-x-0 bottom-0 z-30 pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[calc(var(--margin-x)+12px)] pr-4 pt-2">
