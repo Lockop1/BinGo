@@ -46,3 +46,12 @@ Replaces the fixed 24-hour auto-end with a host-set deadline (`games.deadline_at
   - Status notes: DONE. Create form picker (Tonight default), `LobbyDeadline` with host Change sheet + Passed lock on Start, TopBar countdown (muted; `data-urgent` under 1 h; hidden under toasts; opens Players), "1 hour left." once per phone per deadline (`bingo.deadlineToast.<gameId>`), host Extend once (+1h/+3h/+24h/custom ≤ +24h) in Players, auto-end → recap with host-only `game_ended by:auto`. e2e `deadline.spec.ts` (a)–(g); TESTING.md updated (320 lines).
 - [x] **11d — Verification + fixes**
   - Status notes: Phase 11 verified by a fresh agent (no Blocker/Major; 68 DB probes, 146 time-zone cases); minors fixed: hour-based caps (DST-proof), `games.updated_at` + merge-by-version (no stale-row flicker after an extension), overdue members not renamed, create-form drift notice, 320 px title floor, TESTING.md line. 37 SQL / 483 unit / 27 e2e green.
+
+## Playtest Round 1 (2026-10-27)
+
+- [ ] **Session A — Home and lobby clarity**: Home "Join game" code entry with inline errors; lobby header as a title with the deadline beneath; free-space toggle removed from the lobby (create screen only).
+  - Status notes: not started.
+- [ ] **Session B — Game flow logic** [EXTRA-HIGH]: server-synced 5 s start countdown (`countdown_ends_at`, completions rejected until then); host controls (Extend / End) in a Host section of the settings sheet; blackout auto-ends the game in the RPC with `end_reason`; post-game media for own squares until expiry + recap entry point.
+  - Status notes: not started.
+- [ ] **Session C — Start, blackout, end animations**: pencil "5 4 3 2 1" countdown; marquee-bulb BLACKOUT sequence per theme; credits card → recap (short buzzer intro for host/deadline ends); reduced motion fades; play once per phone.
+  - Status notes: not started.
