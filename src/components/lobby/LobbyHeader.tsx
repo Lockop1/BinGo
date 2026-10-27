@@ -144,7 +144,6 @@ export function LobbyHeader({
         {name}
       </h1>
       {deadline}
-      <p className="text-lg leading-7 text-ink-soft">Lobby · fill the board together, then tap Ready.</p>
     </header>
   );
 }
