@@ -122,7 +122,13 @@ export async function startGame(phones: Pick<TwoPhones, "host" | "friend">): Pro
 /** Opens the board's Settings sheet (the host's Extend deadline / End game live in its Host section). */
 export async function openSettings(page: Page): Promise<void> {
   await page.getByTestId("settings-button").click();
-  await expect(page.getByTestId("settings-sheet")).toBeVisible();
+  const sheet = page.getByTestId("settings-sheet");
+  await expect(sheet).toBeVisible();
+  // Let the slide-up finish before callers measure positions inside the sheet.
+  await sheet
+    .evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)))
+    .catch(() => undefined);
+  await page.waitForTimeout(100);
 }
 
 /** The host ends the live game from Settings → Host → End game (with its confirm step). */
@@ -131,6 +137,24 @@ export async function endGameFromSettings(page: Page): Promise<void> {
   await expect(page.getByTestId("settings-host")).toBeVisible();
   await page.getByTestId("end-game").click();
   await page.getByTestId("end-game-confirm").click();
+}
+
+/**
+ * A live end plays the end sequence (buzzer or blackout marquee, then the
+ * credits card) over the recap, for a few seconds: waits until it is gone,
+ * tapping the credits' Skip as soon as it shows unless `skip: false`.
+ */
+export async function waitForEndSequence(page: Page, { timeout = 15_000, skip = true } = {}): Promise<void> {
+  const sequence = page.getByTestId("end-sequence");
+  if (skip) {
+    const until = Date.now() + timeout;
+    const button = page.getByTestId("credits-skip");
+    while (Date.now() < until && (await sequence.count()) > 0) {
+      if (await button.isVisible().catch(() => false)) await button.click({ timeout: 1_000 }).catch(() => undefined);
+      await page.waitForTimeout(100);
+    }
+  }
+  await expect(sequence).toHaveCount(0, { timeout });
 }
 
 /** Two phones that have reached an active game (Night Out pack unless told otherwise). */

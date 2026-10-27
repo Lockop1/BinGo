@@ -23,6 +23,8 @@ type LocalSchema = {
   [key: `bingo.pending.${string}`]: PendingAction[];
   /** The deadline (ISO) this phone last showed the "1 hour left." toast for, per game (see lib/game/toasts). */
   [key: `bingo.deadlineToast.${string}`]: string;
+  /** The end sequence this phone already played for a game ("blackout" | "buzzer"), so it never plays twice (see lib/game/endSequence). */
+  [key: `bingo.endSeen.${string}`]: string;
 };
 
 export type LocalKey = keyof LocalSchema;

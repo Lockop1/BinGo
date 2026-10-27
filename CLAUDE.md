@@ -556,6 +556,19 @@ compiler's printer, 2-space indent) and keep the header comment.
   resync. `GameScreen` then shows the recap (`data-end-reason` on `game-ended`); the phone whose player
   crossed off the finishing square (`blackoutFinisher` in `lib/game/blackout.ts`: its `completed_at`
   equals `ended_at`) sends `game_ended` with `by: "blackout"`, once.
+- **Start and end moments** (visual layer only; they read state and never change it): during the
+  countdown phase `StartCountdown` (`components/game/`) draws pencil digits 5→1 over the dimmed, inert
+  lobby from `countdownSecondsLeft(serverNow())` (same digit on every phone) with a `pulse()` per tick,
+  then B's flip plays `StartTransition`. When a game goes from live to ended on this phone (a live flip
+  on server-confirmed data, `lib/game/endSequence.ts` decides), `EndSequence` plays over the already
+  mounted recap: `end_reason = 'blackout'` → `BlackoutSequence` (22 marquee bulbs around "BLACKOUT",
+  chase → flash → flicker → die out → dark, ~3.9 s, themed: amber filaments on Scoreboard, marker
+  bulbs on Whiteboard; `Celebration` skips its own blackout overlay) → `CreditsCard` (name, date,
+  players in their colors, n/25, Skip ≥ 44 px, auto-advance ~3.2 s) → recap; `'host'`/`'deadline'` →
+  a ~1 s buzzer card ("Game over" / "Time's up", `doublePulse()`) → credits → recap. Opacity and
+  transform only (plus the digits' stroke draw-in); reduced motion = fades and static cards. It plays
+  once per phone: `bingo.endSeen.<gameId>` is written as it starts, so reloads, mid-sequence opens and
+  already-ended games show only the recap.
 - **Optimistic layer**: taps go into `pendingActions.ts` (one queue per game, persisted to
   `bingo.pending.<gameId>`): one action at a time per square, squares in parallel, only while online,
   exponential backoff (≤ 30 s) on `unknown` / `not_authenticated` / `countdown_in_progress` (a tap that
@@ -621,7 +634,7 @@ compiler's printer, 2-space indent) and keep the header comment.
   `NEXT_PUBLIC_ENABLE_SW=1` (the e2e sets it), as `/sw.js?supabase=<origin>[&dev=1]`.
 - **Browser storage keys** (all through `lib/storage/local.ts`, never throwing): `bingo.displayName`,
   `bingo.settings`, `bingo.activeGame`, `bingo.lastEnded`, `bingo.pending.<gameId>`,
-  `bingo.celebrated.<gameId>`; sessionStorage `bingo.stayHome`; auth lives in @supabase/ssr cookies
+  `bingo.celebrated.<gameId>`, `bingo.deadlineToast.<gameId>`, `bingo.endSeen.<gameId>`; sessionStorage `bingo.stayHome`; auth lives in @supabase/ssr cookies
   `sb-<ref>-auth-token[.N]`.
 - **Tests**: `npm run test` (Vitest, `src/**/*.test.ts`, node env), `npm run e2e` (Playwright,
   Chromium 375×812, starts or reuses `next dev` on :3000 with `NEXT_PUBLIC_SYNC_POLL_MS=1500`),

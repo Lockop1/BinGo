@@ -3,6 +3,8 @@
 import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { BoardScreen, endedProps } from "@/components/board/BoardScreen";
+import { EndSequence, endSequenceSeen } from "@/components/game/EndSequence";
+import { StartCountdown } from "@/components/game/StartCountdown";
 import { StartTransition, type StartSquare } from "@/components/game/StartTransition";
 import { NotFound } from "@/components/join/JoinScreen";
 import { Lobby } from "@/components/lobby/Lobby";
@@ -29,15 +31,16 @@ import {
   type ActiveGameRecord,
 } from "@/lib/game/activeGame";
 import { blackoutFinisher } from "@/lib/game/blackout";
+import { isLiveEndFlip, shouldPlayEndSequence, type ScreenPhase } from "@/lib/game/endSequence";
 import type { DroppedAction } from "@/lib/game/pendingActions";
 import { serverNow, serverOffsetMs, subscribeServerClock } from "@/lib/game/serverClock";
 import { droppedNotices } from "@/lib/game/toasts";
 import {
   countdownEndsAt,
-  countdownSecondsLeft,
   effectiveStatus,
   endReason,
   isInCountdown,
+  type EndReason,
   type GameStatus,
   type Square,
 } from "@/lib/game/types";
@@ -122,6 +125,9 @@ function Paper({ children }: { children: ReactNode }) {
 /** What the start transition draws: the lobby board as it was when the start landed. */
 type StartShow = { key: number; name: string; squares: StartSquare[]; freeCenter: boolean };
 
+/** The end sequence to play over the recap (a live end on this phone, not played here before). */
+type EndShow = { key: number; reason: EndReason | null };
+
 /** setTimeout's ceiling (~24.8 days); deadline_at is at most ~8 days away (7 days + one extension of a day). */
 const MAX_TIMER_MS = 2_147_000_000;
 
@@ -150,7 +156,7 @@ function useServerOffset(): number {
  * What the game screen shows: the effective status, with the start countdown
  * split out of `active` (the board appears once it is over).
  */
-type GamePhase = GameStatus | "countdown";
+type GamePhase = ScreenPhase;
 
 /**
  * Keeps `bingo.activeGame` in step with what this screen shows (debounced;
@@ -394,41 +400,6 @@ function DroppedNotice({
   );
 }
 
-/**
- * The shared start countdown: the whole seconds left until the server's
- * `countdown_ends_at` (5, 4, 3, 2, 1) on this phone's clock plus the measured
- * correction. A minimal placeholder: the final visuals come later. The
- * board replaces it the moment the countdown is over (GameView re-renders at
- * `countdown_ends_at`).
- */
-function StartCountdown({ name, endsAt }: { name: string; endsAt: string }) {
-  const [, setTick] = useState(0);
-  // Never "0": at zero the board takes over.
-  const left = Math.max(1, countdownSecondsLeft({ countdown_ends_at: endsAt }, serverNow()));
-  // Wake just after the next whole-second boundary (re-armed after every render).
-  useEffect(() => {
-    const remaining = Date.parse(endsAt) - serverNow();
-    if (!(remaining > 0)) return;
-    const timer = window.setTimeout(() => setTick((t) => t + 1), (remaining % 1000 || 1000) + 15);
-    return () => window.clearTimeout(timer);
-  });
-  return (
-    <div className="flex min-w-0 flex-col items-center gap-2 py-10 text-center">
-      <PaperTitle>{name}</PaperTitle>
-      <p className="text-xl leading-7 text-ink-soft">Starting in</p>
-      <p
-        role="timer"
-        aria-label={`Starting in ${left}`}
-        className="text-[7rem] leading-none tabular-nums"
-        data-testid="start-countdown"
-        data-seconds={left}
-      >
-        {left}
-      </p>
-    </div>
-  );
-}
-
 function GameView({
   gameId,
   cached,
@@ -472,8 +443,14 @@ function GameView({
       : liveStatus;
   const [seen, setSeen] = useState<{ phase: GamePhase; confirmed: boolean } | null>(null);
   const [start, setStart] = useState<StartShow | null>(null);
+  const [end, setEnd] = useState<EndShow | null>(null);
   if (result.status === "ready" && phase !== null && (phase !== seen?.phase || result.confirmed !== seen.confirmed)) {
     setSeen({ phase, confirmed: result.confirmed });
+    // The board (or the countdown) was up and the game ended: the end sequence plays over the
+    // recap, once per phone. Opening an ended game, or a reload mid-way, goes straight to it.
+    if (shouldPlayEndSequence({ liveFlip: isLiveEndFlip(seen, phase), seen: endSequenceSeen(gameId) })) {
+      setEnd((previous) => ({ key: (previous?.key ?? 0) + 1, reason: endReason(result.game) }));
+    }
     if ((seen?.phase === "lobby" || seen?.phase === "countdown") && seen.confirmed && phase === "active") {
       setStart((previous) => ({
         key: (previous?.key ?? 0) + 1,
@@ -525,6 +502,8 @@ function GameView({
         phase={phase}
         start={start}
         onStartDone={() => setStart(null)}
+        end={end}
+        onEndDone={() => setEnd(null)}
         theme={theme}
         settings={settings}
       />
@@ -547,6 +526,8 @@ function GameBody({
   phase,
   start,
   onStartDone,
+  end,
+  onEndDone,
   theme,
   settings,
 }: {
@@ -560,6 +541,9 @@ function GameBody({
   phase: GamePhase | null;
   start: StartShow | null;
   onStartDone: () => void;
+  /** The end sequence playing over the recap, if any. */
+  end: EndShow | null;
+  onEndDone: () => void;
   theme: Look["theme"];
   settings: Look["settings"];
 }) {
@@ -599,24 +583,9 @@ function GameBody({
 
   const { game } = result;
   const countdownAt = countdownEndsAt(game);
+  const countdown = phase === "countdown" && countdownAt !== null;
 
-  if (phase === "countdown" && countdownAt) {
-    return (
-      <Paper>
-        <div
-          className="flex min-w-0 flex-col"
-          data-testid="game-screen"
-          data-status="active"
-          data-phase="countdown"
-          data-sync-state={result.syncState}
-        >
-          <StartCountdown name={game.name} endsAt={countdownAt} />
-        </div>
-      </Paper>
-    );
-  }
-
-  if (status === "active") {
+  if (status === "active" && !countdown) {
     return (
       <>
         <BoardScreen
@@ -630,6 +599,7 @@ function GameBody({
           refresh={result.refresh}
           applyGame={result.applyGame}
           applySquare={result.applySquare}
+          endSequence
         />
         {start ? (
           <StartTransition
@@ -648,47 +618,77 @@ function GameBody({
   }
 
   return (
-    <Paper>
-      <div className="flex min-w-0 flex-col" data-testid="game-screen" data-status={status} data-sync-state={result.syncState}>
-        {status === "lobby" ? (
-          <Lobby
-            game={game}
-            players={result.players}
-            squares={result.squares}
-            me={result.me}
-            syncState={result.syncState}
-            refresh={result.refresh}
-            applyGame={result.applyGame}
-            applyPlayer={result.applyPlayer}
-            applySquare={result.applySquare}
-          />
-        ) : (
-          // Ended: the paper recap (its story viewer brings its own dark backdrop).
-          // data-end-reason: host | deadline | blackout (null for the deadline passing before the
-          // server row says ended, and for games that ended before the column existed).
-          <div className="flex min-w-0 flex-col gap-7" data-testid="game-ended" data-end-reason={endReason(game) ?? undefined}>
-            <RecapViewedTracker gameId={game.id} mediaCount={result.media.length} />
-            <Recap
-              game={game}
-              players={result.players}
-              squares={result.squares}
-              media={result.media}
-              headingLevel="h1"
-            />
-            <PencilLink
-              href="/"
-              variant="secondary"
-              className="w-full"
-              data-testid="back-home"
-              onClick={() => goHomeOnPurpose(gameId, { ended: true })}
+    <>
+      <Paper>
+        <div
+          className="flex min-w-0 flex-col"
+          data-testid="game-screen"
+          data-status={status}
+          data-phase={countdown ? "countdown" : undefined}
+          data-sync-state={result.syncState}
+        >
+          {status === "lobby" || countdown ? (
+            // The countdown is drawn over the paper lobby, which stays (dimmed, frozen) underneath:
+            // the same Lobby element as before the start, so nothing on it remounts.
+            <div
+              className="flex min-w-0 flex-col transition-opacity duration-300"
+              style={{ opacity: countdown ? 0.2 : 1 }}
+              inert={countdown || undefined}
+              aria-hidden={countdown || undefined}
             >
-              Back to home
-            </PencilLink>
-            {/* The quiet rematch link is the very last thing on the recap, under Back to home. */}
-            <PlayAgainLink game={game} me={result.me} refresh={result.refresh} />
-          </div>
-        )}
-      </div>
-    </Paper>
+              <Lobby
+                game={game}
+                players={result.players}
+                squares={result.squares}
+                me={result.me}
+                syncState={result.syncState}
+                refresh={result.refresh}
+                applyGame={result.applyGame}
+                applyPlayer={result.applyPlayer}
+                applySquare={result.applySquare}
+              />
+            </div>
+          ) : (
+            // Ended: the paper recap (its story viewer brings its own dark backdrop).
+            // data-end-reason: host | deadline | blackout (null for the deadline passing before the
+            // server row says ended, and for games that ended before the column existed).
+            <div className="flex min-w-0 flex-col gap-7" data-testid="game-ended" data-end-reason={endReason(game) ?? undefined}>
+              <RecapViewedTracker gameId={game.id} mediaCount={result.media.length} />
+              <Recap
+                game={game}
+                players={result.players}
+                squares={result.squares}
+                media={result.media}
+                headingLevel="h1"
+              />
+              <PencilLink
+                href="/"
+                variant="secondary"
+                className="w-full"
+                data-testid="back-home"
+                onClick={() => goHomeOnPurpose(gameId, { ended: true })}
+              >
+                Back to home
+              </PencilLink>
+              {/* The quiet rematch link is the very last thing on the recap, under Back to home. */}
+              <PlayAgainLink game={game} me={result.me} refresh={result.refresh} />
+            </div>
+          )}
+        </div>
+      </Paper>
+      {countdown && countdownAt ? <StartCountdown name={game.name} endsAt={countdownAt} /> : null}
+      {status === "ended" && end ? (
+        <EndSequence
+          key={end.key}
+          gameId={gameId}
+          reason={end.reason}
+          theme={theme}
+          game={game}
+          players={result.players}
+          squares={result.squares}
+          onDone={onEndDone}
+        />
+      ) : null}
+    </>
   );
 }

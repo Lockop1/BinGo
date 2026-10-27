@@ -42,19 +42,25 @@ function Strokes({ color, reduce }: { color: string; reduce: boolean }) {
  * `highlight` (the grid pulses the line; this layer only announces it) and
  * `overlay` (full-screen "BINGO!", tap to skip). A blackout ends the game on
  * the server, so the board (and this overlay) soon give way to the recap.
+ * `skipBlackoutOverlay`: the game screen's end sequence gives the blackout its
+ * own moment (components/game/BlackoutSequence.tsx), so this layer draws no
+ * "BLACKOUT!" overlay of its own (the grid's highlight still pulses).
  */
 export function Celebration({
   celebration: showing,
   theme,
   onDismiss,
+  skipBlackoutOverlay = false,
 }: {
   celebration: ActiveCelebration | null;
   theme: PaletteTheme;
   onDismiss: () => void;
+  skipBlackoutOverlay?: boolean;
 }) {
   const reduce = useReducedMotion() ?? false;
   const color = showing?.color != null ? playerColor(showing.color, theme).fill : "var(--board-ink)";
   const word = showing?.blackout ? "BLACKOUT!" : "BINGO!";
+  const overlay = showing !== null && !(showing.blackout && skipBlackoutOverlay);
 
   return (
     <AnimatePresence>
@@ -65,12 +71,15 @@ export function Celebration({
           data-testid="celebration"
           data-phase={showing.phase}
           data-kind={showing.blackout ? "blackout" : "bingo"}
+          data-overlay={overlay ? undefined : "skipped"}
         >
-          <p className="sr-only" role="status" aria-live="assertive">
-            {word} {subtitle(showing)}
-          </p>
+          {overlay ? (
+            <p className="sr-only" role="status" aria-live="assertive">
+              {word} {subtitle(showing)}
+            </p>
+          ) : null}
           <AnimatePresence>
-            {showing.phase === "overlay" ? (
+            {overlay && showing.phase === "overlay" ? (
               <motion.button
                 key="overlay"
                 type="button"

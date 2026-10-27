@@ -653,3 +653,45 @@ html:has(.board[data-theme="scoreboard"]) [data-sheet-backdrop] {
     animation: none;
   }
 }
+
+/* ------------------------------------------------------------------------
+ * End sequence (playtest round 1): the blackout marquee, the final buzzer and
+ * the credits card (components/game/EndSequence.tsx). Solid fills only: a
+ * bulb's brightness is the opacity of its lit layer, never a glow, blur or
+ * gradient. The backdrop is dark in both themes (a cinema title card); the
+ * marquee itself sits on the board's own background.
+ */
+.end-sequence {
+  --end-dark: #0b0b0d;
+  --end-ink: #fbf6ea;
+  --end-muted: #a9a395;
+  --end-accent: #f2b33d;
+  --end-rule: #f2b33d;
+  --marquee-bg: #0b0b0d;
+  --marquee-panel: #121216;
+  --marquee-panel-line: #2c2c33;
+  --marquee-word: #fbf6ea;
+  --marquee-line: #fbf6ea;
+  --bulb-housing: #1b1b20;
+  --bulb-housing-line: #3a3a42;
+  --bulb-off: #3a2f19;
+  --bulb-lit-a: #f2b33d;
+  --bulb-lit-b: #fff1cf;
+  --bulb-core-a: #fffaf0;
+  --bulb-core-b: #f2b33d;
+  --buzzer-bar: #f2b33d;
+}
+.end-sequence[data-theme="whiteboard"] {
+  --end-dark: #121416;
+  --end-ink: #f7f5ef;
+  --end-muted: #a5aaaf;
+  --end-accent: #ff6b6b;
+  --end-rule: #f7f5ef;
+  --marquee-bg: #ffffff;
+  --marquee-word: #15181b;
+  --marquee-line: #15181b;
+  --bulb-off: #e9ebec;
+  --bulb-lit-a: #c62828;
+  --bulb-lit-b: #15181b;
+  --buzzer-bar: #e53935;
+}

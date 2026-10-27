@@ -57,6 +57,8 @@ export type BoardScreenProps = {
   refresh: () => Promise<void>;
   applyGame: (row: Game) => void;
   applySquare: (row: Square) => void;
+  /** The game screen plays its own end sequence for a blackout: no "BLACKOUT!" overlay here. */
+  endSequence?: boolean;
 };
 
 type SheetState =
@@ -141,6 +143,7 @@ export function BoardScreen({
   refresh,
   applyGame,
   applySquare,
+  endSequence = false,
 }: BoardScreenProps) {
   const { settings, theme, systemTheme, update: updateSettings } = useSettings();
   const paletteTheme = paletteThemeFor(theme);
@@ -416,7 +419,12 @@ export function BoardScreen({
         </section>
       </div>
 
-      <Celebration celebration={current} theme={paletteTheme} onDismiss={celebrations.dismiss} />
+      <Celebration
+        celebration={current}
+        theme={paletteTheme}
+        onDismiss={celebrations.dismiss}
+        skipBlackoutOverlay={endSequence}
+      />
 
       <Sheet
         open={sheetOpen && sheet?.kind === "square" && selected !== undefined}
