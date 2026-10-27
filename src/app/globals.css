@@ -619,3 +619,37 @@ html:has(.board[data-theme="scoreboard"]) [data-sheet-backdrop] {
   aspect-ratio: 1 / var(--board-cell-ratio);
   container-type: inline-size;
 }
+
+/* ------------------------------------------------------------------------
+ * Lobby header: the game name reads as the page title. Patrick Hand ships a
+ * single weight, so a thin same-color stroke presses the letters darker
+ * (heavier pencil) instead of a synthesized bold. The lobby never follows the
+ * board's text-size setting; these sizes hold at 320 px.
+ */
+.lobby-title {
+  font-family: var(--font-pencil), "Comic Sans MS", "Chalkboard SE", ui-rounded, system-ui, sans-serif;
+  font-size: 44px;
+  line-height: 56px;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  -webkit-text-stroke: 0.6px currentColor;
+}
+@media (max-width: 359px) {
+  .lobby-title {
+    font-size: 38px;
+  }
+}
+.lobby-title-underline path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+  animation: pencil-draw 420ms ease-out both;
+}
+.lobby-title-underline path + path {
+  animation-delay: 140ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lobby-title-underline path {
+    animation: none;
+  }
+}

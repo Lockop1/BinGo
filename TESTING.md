@@ -57,6 +57,8 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
 
 ## 3. Join (Phone B)
 
+Alternative without a link: **Phone B** opens the app URL, finds "Got a code? Join a game" under New game, types the code as **abcd 2345** (lower case and a space are fine), taps "Join" and lands on the join screen below. A wrong code shows "We couldn't find that game." right there.
+
 1. **Phone B (friend):** tap the link in the chat.
    - [ ] You see "You're invited to", then **Friday Test**, then "Lobby · 1/10 players".
 2. **Phone B:** enter **Jamie** under "Your name" and tap "Join".
@@ -82,11 +84,11 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
    - [ ] **Phone A:** that square shows a small "×3" within about a second.
    - If it fails → if Phone A only changes after ~15 s, check the Realtime publication. A red error under the
      form points to RLS or the `update_square` RPC.
-3. **Phone A:** turn off the switch "Free space in the center". The text below it changes to "The center is a normal square."
-   - [ ] **Phone B:** the center "FREE" turns into an empty square showing "+".
-   - **Phone A:** turn the switch back on ("Starts crossed off for everyone.").
-   - [ ] **Phone B:** the center reads "FREE" again. Tap it: a "Free space" sheet says
-     "Alex (the host) can turn it off to make it a normal square." There is no switch on Phone B.
+3. **Phone B:** tap the center "FREE" square.
+   - [ ] A "Free space" sheet says "Free space was set when the game was created.", with no switch or other control.
+   - **Phone A (host):** tap the center too.
+   - [ ] The same sheet, also with no switch: the free space is chosen only on the Create screen (step 1), and the
+     lobby has no free-space control anywhere, not even for the host.
 4. **Phone B:** tap "Leave" (top right).
    - [ ] Phone B goes to home. **Phone A** shows "Players 1/10" within about a second.
    - **Phone B:** open the invite link from the chat again and tap "Join" (the name is filled in).

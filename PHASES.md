@@ -49,8 +49,8 @@ Replaces the fixed 24-hour auto-end with a host-set deadline (`games.deadline_at
 
 ## Playtest Round 1 (2026-10-27)
 
-- [ ] **Session A — Home and lobby clarity**: Home "Join game" code entry with inline errors; lobby header as a title with the deadline beneath; free-space toggle removed from the lobby (create screen only).
-  - Status notes: not started.
+- [x] **Session A — Home and lobby clarity**: Home "Join game" code entry with inline errors; lobby header as a title with the deadline beneath; free-space toggle removed from the lobby (create screen only).
+  - Status notes: DONE. `HomeJoin` ("Got a code? Join a game": normalises, `peek_game` check, inline not-found/full/ended copy, routes to `/g/<code>`), shared `JoinCodeInput`, lobby title header with pencil underline + rule, free-space toggle removed from the lobby (create screen only; `set_free_center` RPC kept unused). e2e `home-join.spec.ts`; lobby spec updated; TESTING.md §3–4.
 - [ ] **Session B — Game flow logic** [EXTRA-HIGH]: server-synced 5 s start countdown (`countdown_ends_at`, completions rejected until then); host controls (Extend / End) in a Host section of the settings sheet; blackout auto-ends the game in the RPC with `end_reason`; post-game media for own squares until expiry + recap entry point.
   - Status notes: not started.
 - [ ] **Session C — Start, blackout, end animations**: pencil "5 4 3 2 1" countdown; marquee-bulb BLACKOUT sequence per theme; credits card → recap (short buzzer intro for host/deadline ends); reduced motion fades; play once per phone.

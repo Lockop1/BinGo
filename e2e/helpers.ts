@@ -1,7 +1,14 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "@playwright/test";
+import {
+  expect,
+  type APIRequestContext,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Page,
+} from "@playwright/test";
 
 /**
  * Shared two-phone setup for the live-board specs. The local backend never
@@ -271,4 +278,39 @@ export function setDeadlineViaDb(gameId: string, iso: string): void {
     encoding: "utf8",
   });
   expect(out.trim(), `setDeadlineViaDb(${gameId})`).toBe(gameId);
+}
+
+/**
+ * A fresh anonymous user straight from the auth server, with no browser or page load: the
+ * cheap way to fill a game with players (e.g. ten for a full game). Needs anonymous sign-ins
+ * enabled, as the app itself does.
+ */
+export async function anonUser(request: APIRequestContext): Promise<{ token: string; userId: string }> {
+  const env = publicSupabaseEnv();
+  if (!env) throw new Error("NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+  const res = await request.post(`${env.url}/auth/v1/signup`, {
+    headers: { apikey: env.anonKey, "Content-Type": "application/json" },
+    data: {},
+  });
+  expect(res.ok(), `anonymous sign-in: ${res.status()} ${await res.text()}`).toBe(true);
+  const body = (await res.json()) as { access_token?: string; user?: { id?: string } };
+  expect(body.access_token, "access token").toBeTruthy();
+  return { token: body.access_token!, userId: body.user?.id ?? "" };
+}
+
+/** Calls an RPC with a bare access token (from `anonUser`); same RLS / security definer checks as the app. */
+export async function rpcWithToken<T>(
+  request: APIRequestContext,
+  token: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<T> {
+  const env = publicSupabaseEnv();
+  if (!env) throw new Error("NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+  const res = await request.post(`${env.url}/rest/v1/rpc/${name}`, {
+    headers: { apikey: env.anonKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    data: args,
+  });
+  expect(res.ok(), `${name}: ${res.status()} ${await res.text()}`).toBe(true);
+  return (await res.json()) as T;
 }

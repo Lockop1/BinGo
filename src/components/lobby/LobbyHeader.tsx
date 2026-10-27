@@ -21,6 +21,10 @@ const HEADER_ACTION =
  * forgets the game on this phone and goes home. The host cannot leave (no host
  * transfer); they get End game instead, behind a confirm step (`end_game`
  * works from the lobby too).
+ *
+ * The game name is the page title: big, heavier pencil type with a
+ * hand-drawn underline; the deadline and the lobby hint sit under it as
+ * smaller lines, and a faint pencil rule closes the header off from the rest.
  */
 export function LobbyHeader({
   gameId,
@@ -80,7 +84,7 @@ export function LobbyHeader({
   };
 
   return (
-    <header className="flex min-w-0 flex-col">
+    <header className="lobby-header flex min-w-0 flex-col">
       <div className="flex min-h-11 items-center justify-between gap-2">
         <SyncDot state={syncState} onResync={onResync} />
         {isHost ? (
@@ -140,11 +144,69 @@ export function LobbyHeader({
           {error}
         </p>
       ) : null}
-      <h1 className="font-pencil text-4xl leading-[56px] tracking-wide break-words" data-testid="lobby-title">
+      <h1 className="lobby-title relative mt-[7px] w-fit max-w-full pb-[7px]" data-testid="lobby-title">
         {name}
+        <PencilUnderline />
       </h1>
-      {deadline}
-      <p className="text-lg leading-7 text-ink-soft">Lobby · fill the board together, then tap Ready.</p>
+      <div className="mt-[7px] flex min-w-0 flex-col">
+        {deadline}
+        <p className="text-lg leading-7 text-ink-soft">Lobby · fill the board together, then tap Ready.</p>
+      </div>
+      <PencilRule />
     </header>
+  );
+}
+
+/** A quick double pencil stroke under the title, drawn in once (instant with reduced motion). */
+function PencilUnderline() {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 300 14"
+      preserveAspectRatio="none"
+      className="lobby-title-underline pointer-events-none absolute bottom-0 left-0 h-[14px] w-full overflow-visible"
+    >
+      <path
+        d="M2 7.6C48 5.4 96 9.6 150 7.2S246 5 298 7.4"
+        pathLength={1}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2.6}
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+      <path
+        d="M12 10.6C80 8.8 150 11.4 214 9.8S270 9.2 290 10"
+        pathLength={1}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.4}
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+        opacity={0.55}
+      />
+    </svg>
+  );
+}
+
+/** A faint, slightly wavy ruled line that separates the header from the lobby below. */
+function PencilRule() {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 300 14"
+      preserveAspectRatio="none"
+      className="pointer-events-none mt-[7px] block h-[14px] w-full text-ink-faint"
+      data-testid="lobby-header-rule"
+    >
+      <path
+        d="M1 7.4C70 6.2 140 8.4 200 7S270 6.4 299 7.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
   );
 }

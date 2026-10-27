@@ -34,7 +34,8 @@ for 30 days.
 
 ### Game rules
 
-- 5×5 board; center defaults to a free space (host can turn it off).
+- 5×5 board; center defaults to a free space (the host can turn it off on the Create screen; the lobby
+  shows it but has no toggle).
 - Max 10 players, each with a distinct color from a 10-color palette readable on dark and
   light themes.
 - Lobby editing: any player edits any square, last write wins, label ≤40 chars, optional
