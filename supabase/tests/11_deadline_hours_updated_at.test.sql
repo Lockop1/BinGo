@@ -176,6 +176,12 @@ begin
   perform tests.login(f.users[1]);
   v_game := public.start_game(f.game_id);
   perform tests.ok(v_game.updated_at > v_prev, 'start_game stamps');
+  -- Past the 5-second start countdown (time travel as postgres stamps the row too).
+  perform tests.logout();
+  perform tests.pass_countdown(f.game_id);
+  perform tests.login(f.users[1]);
+  select gm.* into v_game from public.games gm where gm.id = f.game_id;
+  perform tests.ok(v_game.updated_at > v_prev, 'any update stamps');
   v_prev := v_game.updated_at;
 
   v_game := public.extend_deadline(f.game_id, v_game.deadline_at + interval '1 hour');

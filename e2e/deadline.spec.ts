@@ -2,6 +2,7 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import {
   LIVE,
   expectFitsWidth,
+  openSettings,
   rpcRawAs,
   selectAs,
   setDeadlineViaDb,
@@ -133,9 +134,9 @@ test("deadline: picked at creation, changed in the lobby, counted down, warned o
   await host.waitForTimeout(3_000);
   for (const page of [host, friend]) expect(await hourToasts(page)).toBe(0);
 
-  // (f) The host extends once by +1 hour: both countdowns move; no second extension.
+  // (f) The host extends once by +1 hour (Settings → Host): both countdowns move; no second extension.
   await expect(friend.getByTestId("players-button")).toBeVisible();
-  await host.getByTestId("players-button").click();
+  await openSettings(host);
   await host.getByTestId("extend-deadline").click();
   const extend = host.getByTestId("extend-sheet");
   await expect(extend).toBeVisible();
@@ -145,9 +146,13 @@ test("deadline: picked at creation, changed in the lobby, counted down, warned o
   for (const page of [host, friend]) {
     await expect(page.getByTestId("deadline-countdown")).toHaveText(/^1h 4[2345]m$/, LIVE);
   }
-  await host.getByTestId("players-button").click();
+  await openSettings(host);
   await expect(host.getByTestId("deadline-extended")).toHaveText("Deadline extended once", LIVE);
   await expect(host.getByTestId("extend-deadline")).toHaveCount(0);
+  await expect(host.getByTestId("settings-auto-end")).toContainText(/^Ends .+ \(1h 4[2345]m\)$/);
+  await host.keyboard.press("Escape");
+  await expect(host.getByTestId("settings-sheet")).toBeHidden();
+  await host.getByTestId("players-button").click();
   await expect(host.getByTestId("auto-end")).toContainText(/^Ends .+ \(1h 4[2345]m\)$/);
   await host.keyboard.press("Escape");
   await friend.getByTestId("players-button").click();
@@ -211,7 +216,7 @@ test("a stale games read after the host's extension never brings back the old de
   });
   await expect.poll(() => before !== null, { timeout: 5_000 }).toBe(true);
 
-  await host.getByTestId("players-button").click();
+  await openSettings(host);
   await host.getByTestId("extend-deadline").click();
   const extend = host.getByTestId("extend-sheet");
   await extend.getByTestId("extend-option-1h").click();
@@ -220,7 +225,7 @@ test("a stale games read after the host's extension never brings back the old de
   await expect(extend).toBeHidden();
   // 24 h 5x m left: "1d" from here on.
   await expect(host.getByTestId("deadline-countdown")).toHaveText(/^1d$/, LIVE);
-  await host.getByTestId("players-button").click();
+  await openSettings(host);
   await expect(host.getByTestId("deadline-extended")).toHaveText("Deadline extended once", LIVE);
 
   // Several polls bring the pre-extension row; none of them may undo what the phone has shown.

@@ -103,24 +103,21 @@ describe("celebration queue", () => {
     expect(queue.getState()).toMatchObject({ shown: 2, current: { id: "b", phase: "highlight" } });
   });
 
-  it("holds a blackout longer and waits for the host's answer", () => {
+  it("holds a blackout longer, then moves on by itself (no end-game prompt: the server ends a blackout)", () => {
     const { clock, queue } = setup();
-    queue.push(event("x", true), { prompt: true });
+    queue.push(event("x", true));
     clock.advance(CELEBRATION_TIMING.highlightMs);
     clock.advance(CELEBRATION_TIMING.bingoMs);
     expect(queue.getState().current?.phase).toBe("overlay");
     clock.advance(CELEBRATION_TIMING.blackoutMs - CELEBRATION_TIMING.bingoMs);
-    expect(queue.getState().current?.phase).toBe("prompt");
-    clock.advance(60_000);
-    expect(queue.getState().current?.phase).toBe("prompt");
-    queue.dismiss();
     expect(queue.getState().current).toBeNull();
   });
 
-  it("only prompts for a blackout, and dismiss skips ahead", () => {
+  it("dismiss skips ahead: highlight, overlay, next", () => {
     const { queue } = setup();
-    queue.push(event("a"), { prompt: true });
-    expect(queue.getState().current?.prompt).toBe(false);
+    queue.push(event("a", true), { color: 3 });
+    expect(queue.getState().current).toMatchObject({ phase: "highlight", color: 3 });
+    expect(queue.getState().current).not.toHaveProperty("prompt");
     queue.dismiss();
     expect(queue.getState().current?.phase).toBe("overlay");
     queue.dismiss();

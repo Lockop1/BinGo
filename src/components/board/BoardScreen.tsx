@@ -208,10 +208,10 @@ export function BoardScreen({
         if (!latest || timestampMicros(latest.completed_at) < timestampMicros(s.completed_at)) latest = s;
       }
       const color = latest ? (players.find((p) => p.id === latest.completed_by_player_id)?.color ?? null) : null;
-      celebrations.push(fresh, { prompt: isHost, color });
+      celebrations.push(fresh, { color });
       doublePulse();
     }
-  }, [board, meId, players, host, isHost, toasts, tracker, celebrations, catchingUp]);
+  }, [board, meId, players, host, toasts, tracker, celebrations, catchingUp]);
 
   // "Jake added a photo to Skyline Chili": media from other phones after mount
   // (not what the first answer to a cached snapshot brings).
@@ -255,7 +255,7 @@ export function BoardScreen({
   useEffect(() => {
     sheetOpenRef.current = sheetOpen;
   }, [sheetOpen]);
-  // Players → Extend: the players sheet closes first, the extend sheet opens once it is gone.
+  // Settings → Host → Extend: the settings sheet closes first, the extend sheet opens once it is gone.
   const sheetAfterClose = useRef<SheetState | null>(null);
   const [story, setStory] = useState<StoryState | null>(null);
   // A thumbnail tap closes the square sheet first and opens the story once the
@@ -323,7 +323,7 @@ export function BoardScreen({
     sheetAfterClose.current = { kind: "extend" };
     setSheetOpen(false);
   };
-  const onPlayersSheetGone = () => {
+  const onSheetGone = () => {
     const next = sheetAfterClose.current;
     sheetAfterClose.current = null;
     if (!next) return;
@@ -416,14 +416,7 @@ export function BoardScreen({
         </section>
       </div>
 
-      <Celebration
-        celebration={current}
-        theme={paletteTheme}
-        ending={ending}
-        endError={endError}
-        onDismiss={celebrations.dismiss}
-        onEndGame={() => void endTheGame()}
-      />
+      <Celebration celebration={current} theme={paletteTheme} onDismiss={celebrations.dismiss} />
 
       <Sheet
         open={sheetOpen && sheet?.kind === "square" && selected !== undefined}
@@ -459,20 +452,8 @@ export function BoardScreen({
         onClose={closeSheet}
         title="Players"
         testId="players-sheet"
-        onExitComplete={onPlayersSheetGone}
       >
-        <PlayersSheetBody
-          game={shownGame}
-          players={players}
-          board={board}
-          meId={meId}
-          isHost={isHost}
-          theme={paletteTheme}
-          ending={ending}
-          error={endError}
-          onEndGame={() => void endTheGame()}
-          onExtend={isHost ? openExtend : undefined}
-        />
+        <PlayersSheetBody game={shownGame} players={players} board={board} meId={meId} theme={paletteTheme} />
         {/* Home on purpose: `/` stays home (with a "Back to your game" row) instead of jumping back here.
             The sheet closes first: the router keeps this screen's state for the way back. */}
         <Link
@@ -488,13 +469,25 @@ export function BoardScreen({
         </Link>
       </Sheet>
 
-      <Sheet open={sheetOpen && sheet?.kind === "settings"} onClose={closeSheet} title="Settings" testId="settings-sheet">
+      <Sheet
+        open={sheetOpen && sheet?.kind === "settings"}
+        onClose={closeSheet}
+        title="Settings"
+        testId="settings-sheet"
+        onExitComplete={onSheetGone}
+      >
         <SettingsSheetBody
           game={shownGame}
           settings={settings}
           theme={theme}
           systemTheme={systemTheme}
           onChange={updateSettings}
+          // Host only (the gear is the one way in; extend_deadline / end_game enforce it again).
+          host={
+            isHost
+              ? { ending, error: endError, onEndGame: () => void endTheGame(), onExtend: openExtend }
+              : undefined
+          }
         />
       </Sheet>
 
@@ -535,13 +528,14 @@ export function BoardScreen({
 /**
  * `game_ended` analytics: counts only (see lib/analytics.ts). `by: "auto"` is
  * the deadline passing (sent from the host's phone by GameScreen); such a game
- * ends at its `deadline_at`.
+ * ends at its `deadline_at`. `by: "blackout"` is the 25th square ending the
+ * game on the server (sent by GameScreen from the phone that crossed it off).
  */
 export function endedProps(
   board: readonly { position: number; completed_at: string | null }[],
   playerCount: number,
   game: Game,
-  by: "host" | "auto",
+  by: "host" | "auto" | "blackout",
 ) {
   const started = game.started_at ? Date.parse(game.started_at) : NaN;
   const endedAt = game.ended_at ?? (by === "auto" ? game.deadline_at : null);

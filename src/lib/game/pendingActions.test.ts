@@ -22,7 +22,7 @@ import {
 import { incrementSquare } from "@/lib/game/rpc";
 import { droppedNotices } from "@/lib/game/toasts";
 import type { SquareResult } from "@/lib/game/types";
-import { runPendingAction } from "@/lib/game/useBoardState";
+import { runPendingAction, settledIntoBlackout } from "@/lib/game/useBoardState";
 import {
   GAME_ID,
   JAKE,
@@ -97,9 +97,11 @@ describe("backoff", () => {
     expect(backoffMs(20, { random: () => 0.999 })).toBeLessThanOrEqual(MAX_BACKOFF_MS);
   });
 
-  it("treats only network/session trouble as retryable", () => {
+  it("treats only network/session trouble and the start countdown as retryable", () => {
     expect(isDefinitiveError("unknown")).toBe(false);
     expect(isDefinitiveError("not_authenticated")).toBe(false);
+    expect(isDefinitiveError("countdown_in_progress")).toBe(false);
+    expect(isGameOverError("countdown_in_progress")).toBe(false);
     for (const code of ["game_not_active", "not_allowed", "invalid_position", "game_not_found", "is_counter"] as const) {
       expect(isDefinitiveError(code)).toBe(true);
     }
@@ -182,6 +184,30 @@ describe("pendingActions", () => {
     await tick();
     expect(store.getState().actions).toHaveLength(0);
     expect(settled[0].outcome).toBe("applied");
+  });
+
+  it("a tap that beat the server's start countdown (countdown_in_progress) is kept and retried, not dropped", async () => {
+    const { store, runner, clock, settled } = setup();
+    store.enqueue(complete(3));
+    store.enqueue(inc(4));
+    runner.calls[0].reject(PG("countdown_in_progress"));
+    runner.calls[1].reject(PG("countdown_in_progress"));
+    await tick();
+    expect(store.getState().actions).toHaveLength(2);
+    expect(store.getState().dropped).toHaveLength(0);
+    expect(settled).toHaveLength(0);
+    // Still shown as crossed off meanwhile.
+    expect(deriveBoard(board(), GAME_ID, store.getState())[3].completed_at).not.toBeNull();
+
+    clock.advance(1000);
+    expect(runner.calls).toHaveLength(4);
+    // The retried +1 keeps its action id, so it can never count twice.
+    expect(runner.calls[3].action.clientId).toBe(runner.calls[1].action.clientId);
+    runner.calls[2].resolve(result(square(3, completedBy(ME, 9)), true));
+    runner.calls[3].resolve(result(square(4, { target_count: 3, current_count: 1, updated_at: stamp(9) }), true));
+    await tick();
+    expect(store.getState().actions).toHaveLength(0);
+    expect(settled.map((s) => s.outcome)).toEqual(["applied", "applied"]);
   });
 
   it("waits while offline and sends on resume once back online", async () => {
@@ -822,5 +848,20 @@ describe("game over and the queue cap", () => {
       "Couldn't save 2 squares — the game had already ended",
       "Couldn't save square 3 — too many taps were waiting offline",
     ]);
+  });
+});
+
+describe("settledIntoBlackout", () => {
+  it("is true only when the settled row crosses off the last open square", () => {
+    const full: Record<number, ReturnType<typeof completedBy>> = {};
+    for (let p = 0; p < 25; p++) if (p !== 24) full[p] = completedBy(p % 2 ? JAKE : ME, p + 1);
+    const squares = board(full);
+    expect(settledIntoBlackout(squares, square(24, completedBy(ME, 30)))).toBe(true);
+    // Someone else got it first (applied = false): the board is still full, the game is still over.
+    expect(settledIntoBlackout(squares, square(24, completedBy(JAKE, 31)))).toBe(true);
+    expect(settledIntoBlackout(squares, square(24))).toBe(false);
+    expect(settledIntoBlackout(squares, null)).toBe(false);
+    const twoOpen = board({ ...full, 23: {} });
+    expect(settledIntoBlackout(twoOpen, square(24, completedBy(ME, 30)))).toBe(false);
   });
 });

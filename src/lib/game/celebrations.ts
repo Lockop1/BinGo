@@ -11,8 +11,9 @@ import { readLocal, writeLocal } from "@/lib/storage/local";
  *   the same line twice. Lines already complete when the board mounts are
  *   counted as celebrated without a party (old news).
  * - The queue plays one celebration at a time through its phases:
- *   `highlight` (the line pulses on the grid) → `overlay` ("BINGO!") →
- *   `prompt` (blackout, host only: offer to end the game) → next.
+ *   `highlight` (the line pulses on the grid) → `overlay` ("BINGO!") → next.
+ *   (A blackout no longer asks the host to end the game: the server ends it
+ *   by itself when the 25th square is crossed off, `end_reason = 'blackout'`.)
  */
 
 export const BLACKOUT_ID = "blackout";
@@ -112,12 +113,10 @@ export function createCelebrationTracker(
 // ---------------------------------------------------------------------------
 // Playback queue
 
-export type CelebrationPhase = "highlight" | "overlay" | "prompt";
+export type CelebrationPhase = "highlight" | "overlay";
 
 export type ActiveCelebration = CelebrationEvent & {
   phase: CelebrationPhase;
-  /** Blackout on the host's phone: ask to end the game after the overlay. */
-  prompt: boolean;
   /** Palette index of whoever crossed off the square that finished it (null: unknown / free). */
   color: number | null;
 };
@@ -143,8 +142,8 @@ export type CelebrationQueueOptions = {
 };
 
 export type CelebrationQueue = {
-  push(event: CelebrationEvent, extra?: { prompt?: boolean; color?: number | null }): void;
-  /** Skip ahead: highlight → overlay → (prompt) → next. */
+  push(event: CelebrationEvent, extra?: { color?: number | null }): void;
+  /** Skip ahead: highlight → overlay → next. */
   dismiss(): void;
   getState(): CelebrationQueueState;
   subscribe(listener: () => void): () => void;
@@ -194,17 +193,12 @@ export function createCelebrationQueue(options: CelebrationQueueOptions = {}): C
       schedule(current.blackout ? timing.blackoutMs : timing.bingoMs);
       return;
     }
-    if (current.phase === "overlay" && current.prompt) {
-      // Waits for the host to answer (dismiss).
-      set({ ...state, current: { ...current, phase: "prompt" } });
-      return;
-    }
     startNext();
   }
 
   return {
     push(event, extra = {}) {
-      waiting.push({ ...event, prompt: Boolean(extra.prompt && event.blackout), color: extra.color ?? null });
+      waiting.push({ ...event, color: extra.color ?? null });
       if (!state.current) startNext();
     },
     dismiss() {

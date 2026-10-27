@@ -28,9 +28,19 @@ import {
   warmPageForOffline,
   type ActiveGameRecord,
 } from "@/lib/game/activeGame";
+import { blackoutFinisher } from "@/lib/game/blackout";
 import type { DroppedAction } from "@/lib/game/pendingActions";
+import { serverNow, serverOffsetMs, subscribeServerClock } from "@/lib/game/serverClock";
 import { droppedNotices } from "@/lib/game/toasts";
-import { effectiveStatus, type GameStatus, type Square } from "@/lib/game/types";
+import {
+  countdownEndsAt,
+  countdownSecondsLeft,
+  effectiveStatus,
+  endReason,
+  isInCountdown,
+  type GameStatus,
+  type Square,
+} from "@/lib/game/types";
 import { usePendingQueue } from "@/lib/game/useBoardState";
 import { useGame, type UseGameResult } from "@/lib/game/useGame";
 import { useSettings } from "@/lib/settings/useSettings";
@@ -45,10 +55,18 @@ import { useSettings } from "@/lib/settings/useSettings";
  * whole viewport (its own background and safe-area padding), so this
  * component decides the frame rather than the route.
  *
- * A live lobby → active flip (the host's own start, or the start arriving
- * via Realtime / the resync poll on everyone else's phone) plays the start
- * transition over the freshly mounted board. Opening a game that is already
- * active shows the board straight away.
+ * A started game first counts down (`countdown_ends_at`, 5 seconds after
+ * `start_game`): every phone shows the countdown to that one server
+ * timestamp, then re-renders the moment it passes, so all boards appear
+ * together. A live lobby / countdown → board flip (the host's own start, or
+ * the start arriving via Realtime / the resync poll on everyone else's phone)
+ * plays the start transition over the freshly mounted board. Opening a game
+ * whose countdown is already over shows the board straight away.
+ *
+ * Clock skew: each phone counts down on its own clock, corrected only when
+ * serverClock.ts has measured it to be clearly off, so two phones whose
+ * clocks differ by a fraction of a second show the board that far apart. A
+ * tap that beats the server's countdown is retried (`countdown_in_progress`).
  *
  * Instant return: the last lobby / active game is kept in `bingo.activeGame`
  * (lib/game/activeGame.ts) with a snapshot of its rows, so reopening it draws
@@ -107,17 +125,32 @@ type StartShow = { key: number; name: string; squares: StartSquare[]; freeCenter
 /** setTimeout's ceiling (~24.8 days); deadline_at is at most ~8 days away (7 days + one extension of a day). */
 const MAX_TIMER_MS = 2_147_000_000;
 
-/** Re-renders once `at` passes, so the effective status flips to ended on time. */
-function useRerenderAt(at: string | null) {
+/**
+ * Re-renders once `at` passes, so the effective status flips to ended (and the
+ * countdown to the board) on time. `offsetMs`: `at` is on the server's clock,
+ * which runs this much ahead of this phone's (serverClock.ts).
+ */
+function useRerenderAt(at: string | null, offsetMs = 0) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!at) return;
-    const ms = Date.parse(at) - Date.now();
+    const ms = Date.parse(at) - offsetMs - Date.now();
     if (!(ms > 0)) return;
     const timer = window.setTimeout(() => setTick((t) => t + 1), Math.min(ms + 50, MAX_TIMER_MS));
     return () => window.clearTimeout(timer);
-  }, [at, tick]);
+  }, [at, offsetMs, tick]);
 }
+
+/** The server clock correction for the countdown (0 unless this phone's clock is clearly off). */
+function useServerOffset(): number {
+  return useSyncExternalStore(subscribeServerClock, serverOffsetMs, () => 0);
+}
+
+/**
+ * What the game screen shows: the effective status, with the start countdown
+ * split out of `active` (the board appears once it is over).
+ */
+type GamePhase = GameStatus | "countdown";
 
 /**
  * Keeps `bingo.activeGame` in step with what this screen shows (debounced;
@@ -246,6 +279,29 @@ function useAutoEndAnalytics(result: UseGameResult, status: GameStatus | null) {
   }, [status, game, squares, playerCount, isHost]);
 }
 
+/**
+ * `game_ended` with `by: "blackout"`, sent once from the phone whose
+ * completion crossed off the 25th square (the server ended the game in that
+ * same transaction: `blackoutFinisher`), when this screen sees the live game
+ * end. Same counts as the other ends.
+ */
+function useBlackoutAnalytics(result: UseGameResult, status: GameStatus | null) {
+  // This mount saw the game live (the finishing square can land a fetch after the ended row).
+  const sawLive = useRef(false);
+  const sent = useRef(false);
+  const game = result.status === "ready" ? result.game : null;
+  const squares = result.status === "ready" ? result.squares : null;
+  const playerCount = result.status === "ready" ? result.players.length : 0;
+  const meId = result.me?.id ?? null;
+  useEffect(() => {
+    if (status === "active") sawLive.current = true;
+    if (sent.current || !sawLive.current || status !== "ended" || !game || !squares || !meId) return;
+    if (blackoutFinisher(game, squares) !== meId) return;
+    sent.current = true;
+    track("game_ended", endedProps(squares, playerCount, game, "blackout"));
+  }, [status, game, squares, playerCount, meId]);
+}
+
 function squareLabel(squares: readonly Square[], position: number): string {
   const label = squares.find((s) => s.position === position)?.label.trim();
   return label || `square ${position + 1}`;
@@ -338,6 +394,41 @@ function DroppedNotice({
   );
 }
 
+/**
+ * The shared start countdown: the whole seconds left until the server's
+ * `countdown_ends_at` (5, 4, 3, 2, 1) on this phone's clock plus the measured
+ * correction. A minimal placeholder: the final visuals come later. The
+ * board replaces it the moment the countdown is over (GameView re-renders at
+ * `countdown_ends_at`).
+ */
+function StartCountdown({ name, endsAt }: { name: string; endsAt: string }) {
+  const [, setTick] = useState(0);
+  // Never "0": at zero the board takes over.
+  const left = Math.max(1, countdownSecondsLeft({ countdown_ends_at: endsAt }, serverNow()));
+  // Wake just after the next whole-second boundary (re-armed after every render).
+  useEffect(() => {
+    const remaining = Date.parse(endsAt) - serverNow();
+    if (!(remaining > 0)) return;
+    const timer = window.setTimeout(() => setTick((t) => t + 1), (remaining % 1000 || 1000) + 15);
+    return () => window.clearTimeout(timer);
+  });
+  return (
+    <div className="flex min-w-0 flex-col items-center gap-2 py-10 text-center">
+      <PaperTitle>{name}</PaperTitle>
+      <p className="text-xl leading-7 text-ink-soft">Starting in</p>
+      <p
+        role="timer"
+        aria-label={`Starting in ${left}`}
+        className="text-[7rem] leading-none tabular-nums"
+        data-testid="start-countdown"
+        data-seconds={left}
+      >
+        {left}
+      </p>
+    </div>
+  );
+}
+
 function GameView({
   gameId,
   cached,
@@ -364,28 +455,33 @@ function GameView({
   // An active game moves to the recap the moment deadline_at passes (an
   // extension arriving via Realtime / resync re-arms the timer).
   useRerenderAt(result.status === "ready" ? result.game.deadline_at : null);
+  // ...and from the start countdown to the board the moment countdown_ends_at passes.
+  const offsetMs = useServerOffset();
+  const countdownAt = result.status === "ready" ? countdownEndsAt(result.game) : null;
+  useRerenderAt(countdownAt, offsetMs);
 
-  // Effective status as last rendered on this mount (null until the game has
-  // loaded), so only a flip seen live starts the transition: a lobby that was
-  // only the cached snapshot does not count. Adjusted during render (not in an
-  // effect) so the board never paints a frame before the overlay covers it.
+  // Effective status (and phase: the countdown is the first moments of
+  // `active`) as last rendered on this mount (null until the game has loaded),
+  // so only a flip seen live starts the transition: a lobby that was only the
+  // cached snapshot does not count. Adjusted during render (not in an effect)
+  // so the board never paints a frame before the overlay covers it.
   const liveStatus: GameStatus | null = result.status === "ready" ? effectiveStatus(result.game) : null;
-  const [seen, setSeen] = useState<{ status: GameStatus; confirmed: boolean } | null>(null);
+  const phase: GamePhase | null =
+    result.status === "ready" && liveStatus === "active" && isInCountdown(result.game, new Date(serverNow()))
+      ? "countdown"
+      : liveStatus;
+  const [seen, setSeen] = useState<{ phase: GamePhase; confirmed: boolean } | null>(null);
   const [start, setStart] = useState<StartShow | null>(null);
-  if (
-    result.status === "ready" &&
-    liveStatus !== null &&
-    (liveStatus !== seen?.status || result.confirmed !== seen.confirmed)
-  ) {
-    setSeen({ status: liveStatus, confirmed: result.confirmed });
-    if (seen?.status === "lobby" && seen.confirmed && liveStatus === "active") {
+  if (result.status === "ready" && phase !== null && (phase !== seen?.phase || result.confirmed !== seen.confirmed)) {
+    setSeen({ phase, confirmed: result.confirmed });
+    if ((seen?.phase === "lobby" || seen?.phase === "countdown") && seen.confirmed && phase === "active") {
       setStart((previous) => ({
         key: (previous?.key ?? 0) + 1,
         name: result.game.name,
         squares: result.squares.map((s) => ({ position: s.position, label: s.label })),
         freeCenter: result.game.free_center,
       }));
-    } else if (liveStatus !== "active") {
+    } else if (phase !== "active") {
       setStart(null);
     }
   }
@@ -408,6 +504,7 @@ function GameView({
 
   useActiveGameRecord(gameId, result, liveStatus, cached, userId, removed);
   useAutoEndAnalytics(result, liveStatus);
+  useBlackoutAnalytics(result, liveStatus);
 
   const notice = (
     <DroppedNotice
@@ -425,6 +522,7 @@ function GameView({
         removed={removed}
         known={known}
         status={liveStatus}
+        phase={phase}
         start={start}
         onStartDone={() => setStart(null)}
         theme={theme}
@@ -446,6 +544,7 @@ function GameBody({
   removed,
   known,
   status,
+  phase,
   start,
   onStartDone,
   theme,
@@ -457,6 +556,8 @@ function GameBody({
   removed: boolean;
   known: KnownGame | null;
   status: GameStatus | null;
+  /** `status`, with the start countdown split out of `active`. */
+  phase: GamePhase | null;
   start: StartShow | null;
   onStartDone: () => void;
   theme: Look["theme"];
@@ -497,6 +598,23 @@ function GameBody({
   }
 
   const { game } = result;
+  const countdownAt = countdownEndsAt(game);
+
+  if (phase === "countdown" && countdownAt) {
+    return (
+      <Paper>
+        <div
+          className="flex min-w-0 flex-col"
+          data-testid="game-screen"
+          data-status="active"
+          data-phase="countdown"
+          data-sync-state={result.syncState}
+        >
+          <StartCountdown name={game.name} endsAt={countdownAt} />
+        </div>
+      </Paper>
+    );
+  }
 
   if (status === "active") {
     return (
@@ -546,7 +664,9 @@ function GameBody({
           />
         ) : (
           // Ended: the paper recap (its story viewer brings its own dark backdrop).
-          <div className="flex min-w-0 flex-col gap-7" data-testid="game-ended">
+          // data-end-reason: host | deadline | blackout (null for the deadline passing before the
+          // server row says ended, and for games that ended before the column existed).
+          <div className="flex min-w-0 flex-col gap-7" data-testid="game-ended" data-end-reason={endReason(game) ?? undefined}>
             <RecapViewedTracker gameId={game.id} mediaCount={result.media.length} />
             <Recap
               game={game}

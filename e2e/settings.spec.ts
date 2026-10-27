@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import { LIVE, expectFitsWidth, twoPhonesInActiveGame, twoPhonesInLobby } from "./helpers";
+import { LIVE, START_COUNTDOWN_MS, expectFitsWidth, twoPhonesInActiveGame, twoPhonesInLobby } from "./helpers";
 
 /**
  * Board settings (theme, text size, square size) and the start transition.
@@ -53,12 +53,13 @@ test("theme follows the phone; the start transition plays on both phones, not af
   const { host, friend } = phones;
 
   await host.getByTestId("start-game").click();
-  // The host's own start: the overlay is up at once and gone within ~2.5 s.
-  await expect(host.getByTestId("start-transition")).toBeVisible();
+  // The host's own start: the shared 5-second countdown first, then the overlay, gone within ~2.5 s.
+  await expect(host.getByTestId("start-countdown")).toBeVisible();
+  await expect(host.getByTestId("start-transition")).toBeVisible({ timeout: START_COUNTDOWN_MS + 2_000 });
   await expect(host.getByTestId("start-transition")).toHaveCount(0, { timeout: 2_500 });
   await expect(board(friend)).toHaveAttribute("data-status", "active", { timeout: 5_000 });
 
-  // The friend learns about the start over the poll and plays it too.
+  // The friend learns about the start over the poll, counts down to the same moment and plays it too.
   for (const page of [host, friend]) {
     await expect.poll(async () => (await transitions(page)).length, { timeout: 10_000 }).toBe(2);
     const [shown, gone] = await transitions(page);

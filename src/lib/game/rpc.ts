@@ -1,6 +1,7 @@
 import { ensureSession } from "@/lib/supabase/auth";
 import { createClient, type BrowserSupabaseClient } from "@/lib/supabase/client";
 import { GameError, toGameError } from "@/lib/game/errors";
+import { noteServerTime } from "@/lib/game/serverClock";
 import type { Game, GamePreview, Media, MediaKind, Player, Square, SquareResult } from "@/lib/game/types";
 import type { Database } from "@/types/database";
 
@@ -20,13 +21,22 @@ type Args<F extends keyof Functions> = Functions[F]["Args"];
 
 type RpcResult<T> = { data: T | null; error: unknown };
 
-async function call<T>(run: (supabase: BrowserSupabaseClient) => PromiseLike<RpcResult<T>>): Promise<T> {
+/**
+ * `stamp` names a server timestamp the RPC wrote during this very call (e.g.
+ * `start_game`'s `started_at`); it feeds the clock-skew estimate for the start
+ * countdown (serverClock.ts). Only for results that always carry a fresh one.
+ */
+async function call<T>(
+  run: (supabase: BrowserSupabaseClient) => PromiseLike<RpcResult<T>>,
+  stamp?: (data: T) => string | null | undefined,
+): Promise<T> {
   try {
     await ensureSession();
   } catch (cause) {
     throw new GameError("not_authenticated", cause);
   }
   let result: RpcResult<T>;
+  const sentAt = Date.now();
   try {
     result = await run(createClient());
   } catch (cause) {
@@ -36,8 +46,12 @@ async function call<T>(run: (supabase: BrowserSupabaseClient) => PromiseLike<Rpc
   if (result.data === null || result.data === undefined) {
     throw new GameError("unknown", new Error("RPC returned no data"));
   }
+  if (stamp) noteServerTime(stamp(result.data), sentAt, Date.now());
   return result.data;
 }
+
+/** A square result's `updated_at` is only this call's stamp when the call changed the square. */
+const appliedStamp = (row: { applied: boolean | null; updated_at: string | null }) => (row.applied ? row.updated_at : null);
 
 /** The generated composite type marks every field nullable; the RPC never returns nulls here. */
 function asSquareResult(row: Functions["complete_square"]["Returns"]): SquareResult {
@@ -98,7 +112,7 @@ export function setReady(args: Args<"set_ready">): Promise<Player> {
 }
 
 export function updateSquare(args: Args<"update_square">): Promise<Square> {
-  return call((sb) => sb.rpc("update_square", args));
+  return call((sb) => sb.rpc("update_square", args), (row) => row.updated_at);
 }
 
 export function setFreeCenter(args: Args<"set_free_center">): Promise<Game> {
@@ -108,7 +122,7 @@ export function setFreeCenter(args: Args<"set_free_center">): Promise<Game> {
 /** Host only, lobby only: a new deadline (ISO string), 10 minutes to 7 days from now. */
 export function setDeadline(gameId: string, deadlineAt: string): Promise<Game> {
   const args: Args<"set_deadline"> = { game_id: gameId, deadline_at: deadlineAt };
-  return call((sb) => sb.rpc("set_deadline", args));
+  return call((sb) => sb.rpc("set_deadline", args), (row) => row.updated_at);
 }
 
 /**
@@ -117,15 +131,25 @@ export function setDeadline(gameId: string, deadlineAt: string): Promise<Game> {
  */
 export function extendDeadline(gameId: string, deadlineAt: string): Promise<Game> {
   const args: Args<"extend_deadline"> = { game_id: gameId, deadline_at: deadlineAt };
-  return call((sb) => sb.rpc("extend_deadline", args));
+  return call((sb) => sb.rpc("extend_deadline", args), (row) => row.updated_at);
 }
 
+/**
+ * Host only: the game goes live with a 5-second countdown (`countdown_ends_at`)
+ * before squares can be completed. The result's `started_at` is also a clock
+ * sample for that countdown.
+ */
 export function startGame(args: Args<"start_game">): Promise<Game> {
-  return call((sb) => sb.rpc("start_game", args));
+  return call((sb) => sb.rpc("start_game", args), (row) => row.started_at);
 }
 
+/**
+ * `countdown_in_progress` until the start countdown has run out. The
+ * completion of the 25th square also ends the game (`end_reason = 'blackout'`):
+ * the result is still the square; the ended games row arrives with the next fetch.
+ */
 export async function completeSquare(args: Args<"complete_square">): Promise<SquareResult> {
-  return asSquareResult(await call((sb) => sb.rpc("complete_square", args)));
+  return asSquareResult(await call((sb) => sb.rpc("complete_square", args), appliedStamp));
 }
 
 /**
@@ -136,11 +160,12 @@ export async function completeSquare(args: Args<"complete_square">): Promise<Squ
 export async function incrementSquare(gameId: string, position: number, actionId: string | null): Promise<SquareResult> {
   const args: Args<"increment_square"> = { game_id: gameId, position };
   if (actionId !== null) args.action_id = actionId;
-  return asSquareResult(await call((sb) => sb.rpc("increment_square", args)));
+  return asSquareResult(await call((sb) => sb.rpc("increment_square", args), appliedStamp));
 }
 
+/** `game_not_active` once the game has ended, a blackout included (the board is final). */
 export async function undoCompletion(args: Args<"undo_completion">): Promise<SquareResult> {
-  return asSquareResult(await call((sb) => sb.rpc("undo_completion", args)));
+  return asSquareResult(await call((sb) => sb.rpc("undo_completion", args), appliedStamp));
 }
 
 export function endGame(args: Args<"end_game">): Promise<Game> {
@@ -171,6 +196,11 @@ export function playAgain(gameId: string): Promise<Game> {
   return call((sb) => sb.rpc("play_again", args));
 }
 
+/**
+ * While live: any completed square. After the end: the caller's own completed
+ * squares until the album expires, anyone's only within 10 minutes of the end
+ * (`not_allowed` after that).
+ */
 export function registerMedia(
   args: Omit<Args<"register_media">, "kind"> & { kind: MediaKind },
 ): Promise<Media> {

@@ -56,6 +56,8 @@ as_user "${users[1]}" "select public.join_game('$join_code', 'Friend') \\g /dev/
 select public.set_ready('$game_id', true) \\g /dev/null" | q -f - >/dev/null || fail "join/ready failed"
 as_user "${users[0]}" "select public.set_ready('$game_id', true) \\g /dev/null
 select public.start_game('$game_id') \\g /dev/null" | q -f - >/dev/null || fail "start failed"
+# Skip the 5-second start countdown (increments wait for it: countdown_in_progress).
+q -c "select tests.pass_countdown('$game_id')" >/dev/null || fail "could not skip the countdown"
 
 mapfile -t ids < <(q -c "select gen_random_uuid() from generate_series(1, $TAPS)")
 [ ${#ids[@]} -eq "$TAPS" ] || fail "could not generate action ids"

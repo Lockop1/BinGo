@@ -170,6 +170,18 @@ describe("upload queue", () => {
     expect(t.queue.retry(id)).toBe(false);
   });
 
+  it("maps not_allowed (post-game media refused) to the upload denied copy, not the undo copy", async () => {
+    const t = setup({ register: () => Promise.reject(new GameError("not_allowed")) });
+    t.queue.enqueue({ gameId: GAME, position: 9, prepared: photo(), playerId: "p1" });
+    await t.queue.whenIdle();
+    expect(t.queue.getSnapshot()[0]).toMatchObject({
+      state: "failed",
+      retryable: false,
+      errorCode: "not_allowed",
+      error: UPLOAD_COPY.denied,
+    });
+  });
+
   it("maps a raw PostgREST P0001 error (game_expired) to its copy", async () => {
     const t = setup({ register: () => Promise.reject({ code: "P0001", message: "game_expired" }) });
     t.queue.enqueue({ gameId: GAME, position: 2, prepared: photo(), playerId: "p1" });

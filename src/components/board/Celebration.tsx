@@ -1,8 +1,6 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Sheet } from "@/components/ui/Sheet";
-import { PencilButton } from "@/components/ui/PencilButton";
 import { lineName } from "@/lib/game/bingo";
 import { jitter } from "@/lib/game/boardText";
 import type { ActiveCelebration } from "@/lib/game/celebrations";
@@ -41,101 +39,68 @@ function Strokes({ color, reduce }: { color: string; reduce: boolean }) {
 
 /**
  * Bingo / blackout celebration. Phases come from the celebration queue:
- * `highlight` (the grid pulses the line; this layer only announces it),
- * `overlay` (full-screen "BINGO!", tap to skip), `prompt` (blackout, host:
- * offer to end the game).
+ * `highlight` (the grid pulses the line; this layer only announces it) and
+ * `overlay` (full-screen "BINGO!", tap to skip). A blackout ends the game on
+ * the server, so the board (and this overlay) soon give way to the recap.
  */
 export function Celebration({
-  celebration,
+  celebration: showing,
   theme,
-  ending,
-  endError,
   onDismiss,
-  onEndGame,
 }: {
   celebration: ActiveCelebration | null;
   theme: PaletteTheme;
-  ending: boolean;
-  endError: string | null;
   onDismiss: () => void;
-  onEndGame: () => void;
 }) {
   const reduce = useReducedMotion() ?? false;
-  const showing = celebration && celebration.phase !== "prompt" ? celebration : null;
   const color = showing?.color != null ? playerColor(showing.color, theme).fill : "var(--board-ink)";
   const word = showing?.blackout ? "BLACKOUT!" : "BINGO!";
 
   return (
-    <>
-      <AnimatePresence>
-        {showing ? (
-          <div
-            key={showing.id}
-            className="pointer-events-none fixed inset-0 z-[60]"
-            data-testid="celebration"
-            data-phase={showing.phase}
-            data-kind={showing.blackout ? "blackout" : "bingo"}
-          >
-            <p className="sr-only" role="status" aria-live="assertive">
-              {word} {subtitle(showing)}
-            </p>
-            <AnimatePresence>
-              {showing.phase === "overlay" ? (
-                <motion.button
-                  key="overlay"
-                  type="button"
-                  onClick={onDismiss}
-                  aria-label={`${word} Tap to continue`}
-                  data-testid="celebration-overlay"
-                  className="pointer-events-auto absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-board-ink"
-                  style={{ backgroundColor: "color-mix(in srgb, var(--board-bg) 90%, transparent)" }}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: reduce ? 0.12 : 0.18 }}
+    <AnimatePresence>
+      {showing ? (
+        <div
+          key={showing.id}
+          className="pointer-events-none fixed inset-0 z-[60]"
+          data-testid="celebration"
+          data-phase={showing.phase}
+          data-kind={showing.blackout ? "blackout" : "bingo"}
+        >
+          <p className="sr-only" role="status" aria-live="assertive">
+            {word} {subtitle(showing)}
+          </p>
+          <AnimatePresence>
+            {showing.phase === "overlay" ? (
+              <motion.button
+                key="overlay"
+                type="button"
+                onClick={onDismiss}
+                aria-label={`${word} Tap to continue`}
+                data-testid="celebration-overlay"
+                className="pointer-events-auto absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-board-ink"
+                style={{ backgroundColor: "color-mix(in srgb, var(--board-bg) 90%, transparent)" }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: reduce ? 0.12 : 0.18 }}
+              >
+                <motion.span
+                  className={`font-board leading-none tracking-wide ${
+                    showing.blackout ? "text-[clamp(3.25rem,17vw,8rem)]" : "text-[clamp(4.5rem,24vw,10rem)]"
+                  }`}
+                  initial={reduce ? { opacity: 0 } : { scale: 0.6, rotate: -6, opacity: 0 }}
+                  animate={reduce ? { opacity: 1 } : { scale: 1, rotate: -3, opacity: 1 }}
+                  transition={reduce ? { duration: 0.12 } : { type: "spring", stiffness: 420, damping: 16 }}
                 >
-                  <motion.span
-                    className={`font-board leading-none tracking-wide ${
-                      showing.blackout ? "text-[clamp(3.25rem,17vw,8rem)]" : "text-[clamp(4.5rem,24vw,10rem)]"
-                    }`}
-                    initial={reduce ? { opacity: 0 } : { scale: 0.6, rotate: -6, opacity: 0 }}
-                    animate={reduce ? { opacity: 1 } : { scale: 1, rotate: -3, opacity: 1 }}
-                    transition={reduce ? { duration: 0.12 } : { type: "spring", stiffness: 420, damping: 16 }}
-                  >
-                    {word}
-                  </motion.span>
-                  <Strokes color={color} reduce={reduce} />
-                  <span className="font-board text-xl text-board-muted">{subtitle(showing)}</span>
-                </motion.button>
-              ) : null}
-            </AnimatePresence>
-          </div>
-        ) : null}
-      </AnimatePresence>
-
-      <Sheet
-        open={celebration?.phase === "prompt"}
-        onClose={onDismiss}
-        title="Blackout!"
-        testId="blackout-prompt"
-      >
-        <div className="flex min-w-0 flex-col gap-[14px] pb-2">
-          <p className="text-xl leading-7">Every square is crossed off. End the game for everyone and open the album?</p>
-          <div className="flex flex-wrap items-center gap-3">
-            <PencilButton onClick={onEndGame} busy={ending} data-testid="blackout-end-game">
-              End game
-            </PencilButton>
-            <PencilButton variant="quiet" onClick={onDismiss}>
-              Keep playing
-            </PencilButton>
-          </div>
-          {endError ? (
-            <p role="alert" className="text-lg leading-7 text-danger">
-              {endError}
-            </p>
-          ) : null}
+                  {word}
+                </motion.span>
+                <Strokes color={color} reduce={reduce} />
+                <span className="font-board text-xl text-board-muted">{subtitle(showing)}</span>
+              </motion.button>
+            ) : null}
+          </AnimatePresence>
         </div>
-      </Sheet>
-    </>
+      ) : null}
+    </AnimatePresence>
   );
 }

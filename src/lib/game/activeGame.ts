@@ -101,6 +101,9 @@ const GAME_SHAPE: Record<string, Check> = {
   deadline_at: str,
   deadline_extended_at: optional(strOrNull),
   expires_at: str,
+  // The start countdown (an active record reopened during it shows the countdown, not the board).
+  countdown_ends_at: optional(strOrNull),
+  end_reason: optional(strOrNull),
 };
 
 const PLAYER_SHAPE: Record<string, Check> = {

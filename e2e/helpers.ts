@@ -98,13 +98,39 @@ export async function twoPhonesInLobby(browser: Browser, options: TwoPhoneOption
   };
 }
 
-/** The host taps Start; resolves once both phones show the live board. */
+/** start_game's shared countdown before the board appears (countdown_ends_at = start + 5 s). */
+export const START_COUNTDOWN_MS = 5_000;
+
+/**
+ * After Start: the phone has seen the game go live (the countdown screen says
+ * `data-status="active"`), the 5-second countdown has run out, the board is up
+ * and the start transition over it has finished, so the cells take taps.
+ */
+export async function waitForBoard(page: Page): Promise<void> {
+  await expect(page.getByTestId("game-screen")).toHaveAttribute("data-status", "active", { timeout: 5_000 });
+  await expect(page.getByTestId("board-grid")).toBeVisible({ timeout: START_COUNTDOWN_MS + 5_000 });
+  await expect(page.getByTestId("start-countdown")).toHaveCount(0);
+  await expect(page.getByTestId("start-transition")).toHaveCount(0, { timeout: 5_000 });
+}
+
+/** The host taps Start; resolves once both phones are past the countdown and show the live board. */
 export async function startGame(phones: Pick<TwoPhones, "host" | "friend">): Promise<void> {
   await phones.host.getByTestId("start-game").click();
-  for (const page of [phones.host, phones.friend]) {
-    await expect(page.getByTestId("game-screen")).toHaveAttribute("data-status", "active", { timeout: 5_000 });
-    await expect(page.getByTestId("board-grid")).toBeVisible();
-  }
+  for (const page of [phones.host, phones.friend]) await waitForBoard(page);
+}
+
+/** Opens the board's Settings sheet (the host's Extend deadline / End game live in its Host section). */
+export async function openSettings(page: Page): Promise<void> {
+  await page.getByTestId("settings-button").click();
+  await expect(page.getByTestId("settings-sheet")).toBeVisible();
+}
+
+/** The host ends the live game from Settings → Host → End game (with its confirm step). */
+export async function endGameFromSettings(page: Page): Promise<void> {
+  await openSettings(page);
+  await expect(page.getByTestId("settings-host")).toBeVisible();
+  await page.getByTestId("end-game").click();
+  await page.getByTestId("end-game-confirm").click();
 }
 
 /** Two phones that have reached an active game (Night Out pack unless told otherwise). */

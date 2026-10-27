@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { LIVE, publicSupabaseEnv, twoPhonesInActiveGame } from "./helpers";
+import { LIVE, endGameFromSettings, publicSupabaseEnv, twoPhonesInActiveGame } from "./helpers";
 
 /**
  * Instant return and the persisted offline queue, on two phones in a live
@@ -206,9 +206,7 @@ test("instant return: board from the snapshot, offline completion across a reloa
   });
 
   await test.step("(c) after the host ends the game, the next open lands on the recap once", async () => {
-    await host.getByTestId("players-button").click();
-    await host.getByTestId("end-game").click();
-    await host.getByTestId("end-game-confirm").click();
+    await endGameFromSettings(host);
     await expect(friend.getByTestId("game-screen")).toHaveAttribute("data-status", "ended", LIVE);
     await expect(friend.getByTestId("recap-summary")).toBeVisible();
     await expect.poll(() => storedActiveGameId(friend)).toBeNull();

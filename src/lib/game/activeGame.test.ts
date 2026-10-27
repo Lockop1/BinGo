@@ -179,6 +179,20 @@ describe("record shape", () => {
     expect(parseActiveGame(JSON.parse(JSON.stringify(record({ deadline_extended_at: 7 as unknown as string }))))).toBeNull();
   });
 
+  it("carries the start countdown (countdown_ends_at), and restores snapshots saved without it", () => {
+    const r = record({ status: "active", started_at: iso(NOW - 2_000), countdown_ends_at: iso(NOW + 3_000) });
+    const restored = parseActiveGame(JSON.parse(JSON.stringify(r)));
+    expect(restored).toEqual(r);
+    expect(restored?.snapshot.game.countdown_ends_at).toBe(iso(NOW + 3_000));
+    // Saved by a build from before the countdown: no such column at all.
+    const legacy = record({ status: "active", started_at: iso(NOW - HOUR) });
+    const game = legacy.snapshot.game as Record<string, unknown>;
+    delete game.countdown_ends_at;
+    delete game.end_reason;
+    expect(parseActiveGame(JSON.parse(JSON.stringify(legacy)))).not.toBeNull();
+    expect(parseActiveGame(JSON.parse(JSON.stringify(record({ countdown_ends_at: 5 as unknown as string }))))).toBeNull();
+  });
+
   it("round-trips through JSON and validates every row", () => {
     const r = record();
     expect(parseActiveGame(JSON.parse(JSON.stringify(r)))).toEqual(r);
