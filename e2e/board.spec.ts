@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { LIVE, expectFitsWidth, twoPhonesInActiveGame } from "./helpers";
+import { LIVE, endGameFromSettings, expectFitsWidth, openSettings, twoPhonesInActiveGame } from "./helpers";
 
 /**
  * The live board on two phones (Night Out pack, free center on). The local
@@ -232,13 +232,21 @@ test("live board: cross-off, toasts, bingo once, undo, counters, offline, end ga
   await expect(friend.getByTestId("end-game")).toHaveCount(0);
   await friend.keyboard.press("Escape");
   await expect(friend.getByTestId("players-sheet")).toBeHidden();
+  // The host's controls live in Settings → Host, which the friend's Settings never shows.
+  await openSettings(friend);
+  await expect(friend.getByTestId("settings-host")).toHaveCount(0);
+  await expect(friend.getByTestId("end-game")).toHaveCount(0);
+  await friend.keyboard.press("Escape");
+  await expect(friend.getByTestId("settings-sheet")).toBeHidden();
 
   await host.getByTestId("players-button").click();
   await expect(host.getByTestId("board-player").filter({ hasText: "Hosty" })).toContainText("you");
   await expect(host.getByTestId("board-player").filter({ hasText: "Hosty" })).toContainText("host");
   await expect(host.getByTestId("auto-end")).toContainText(/^Ends .+ \(.+\)$/);
-  await host.getByTestId("end-game").click();
-  await host.getByTestId("end-game-confirm").click();
+  await expect(host.getByTestId("end-game")).toHaveCount(0);
+  await host.keyboard.press("Escape");
+  await expect(host.getByTestId("players-sheet")).toBeHidden();
+  await endGameFromSettings(host);
 
   for (const page of [host, friend]) {
     await expect(page.getByTestId("recap-summary")).toBeVisible(LIVE);

@@ -12,7 +12,8 @@ import { readLocal, removeLocal, writeLocal } from "@/lib/storage/local";
  *   square off at once, even offline.
  * - `flush` sends actions through the RPCs: one at a time per square (in tap
  *   order), squares in parallel, only while the browser says it is online.
- *   Network / unknown failures retry with exponential backoff (max ~30 s);
+ *   Network / unknown failures (and `countdown_in_progress`, a tap that beat
+ *   the server's start countdown) retry with exponential backoff (max ~30 s);
  *   `resume` (on `online` / tab visible) retries right away.
  * - Every action has a client id (a UUID). A counter +1 sends it as
  *   `increment_square`'s `action_id`, so the server counts each tap exactly
@@ -165,8 +166,13 @@ export function squareKey(gameId: string, position: number): string {
 
 const keyOf = (a: Pick<PendingAction, "gameId" | "position">) => squareKey(a.gameId, a.position);
 
-/** Network trouble or no session yet: worth retrying. Everything else is the server's final answer. */
-const TRANSIENT = new Set<GameErrorCode>(["unknown", "not_authenticated"]);
+/**
+ * Network trouble, no session yet, or the start countdown still running on the
+ * server (a phone whose clock runs a little ahead shows the board early; the
+ * countdown clears within seconds): worth retrying. Everything else is the
+ * server's final answer.
+ */
+const TRANSIENT = new Set<GameErrorCode>(["unknown", "not_authenticated", "countdown_in_progress"]);
 
 export function isDefinitiveError(code: GameErrorCode): boolean {
   return !TRANSIENT.has(code);

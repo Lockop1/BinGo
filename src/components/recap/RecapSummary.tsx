@@ -6,12 +6,18 @@ import { ColorChip } from "@/components/recap/ColorChip";
 import { completedLines } from "@/components/recap/lines";
 import { recapTotals, slug, squareTitle, type RecapItem } from "@/components/recap/recapItems";
 import { downloadAllZip, type ZipProgress } from "@/components/recap/save";
+import { YourSquaresMedia } from "@/components/recap/YourSquaresMedia";
 import { PencilButton } from "@/components/ui/PencilButton";
 import { BOARD_SIZE, type Game, type Player, type Square } from "@/lib/game/types";
 import type { GetSignedUrls } from "@/lib/media/signedUrls";
 
 type Props = {
-  game: Pick<Game, "name" | "expires_at">;
+  /**
+   * The game screen passes its whole row; with `id`, `status` and
+   * `deadline_at` (absent in the media lab's fake recap) the summary also
+   * offers "Your squares" (add media to what you crossed off).
+   */
+  game: Pick<Game, "name" | "expires_at"> & Partial<Pick<Game, "id" | "status" | "deadline_at" | "ended_at">>;
   players: readonly Player[];
   squares: readonly Square[];
   items: readonly RecapItem[];
@@ -29,7 +35,11 @@ function longDate(iso: string): string {
 
 type ZipState = { kind: "idle" } | { kind: "working"; progress: ZipProgress | null } | { kind: "done"; failed: number } | { kind: "error" };
 
-/** The paper "Night recap" card: totals, lines, who did what, the album deadline and its actions. */
+/**
+ * The paper "Night recap" card: totals, lines, who did what, the album
+ * deadline and its actions, then "Your squares" (the viewer's own completed
+ * squares, each with Add photo/video).
+ */
 export function RecapSummary({
   game,
   players,
@@ -174,6 +184,20 @@ export function RecapSummary({
         </div>
       )}
 
+      {game.id && game.status && game.deadline_at ? (
+        <YourSquaresMedia
+          game={{
+            id: game.id,
+            status: game.status,
+            deadline_at: game.deadline_at,
+            ended_at: game.ended_at ?? null,
+            expires_at: game.expires_at,
+          }}
+          players={players}
+          squares={squares}
+          headingLevel={Heading === "h1" ? "h2" : "h3"}
+        />
+      ) : null}
     </section>
   );
 }

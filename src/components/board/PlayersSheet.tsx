@@ -1,8 +1,6 @@
 "use client";
 
-import { useState } from "react";
 import { BoardSwatch } from "@/components/board/BoardSwatch";
-import { PencilButton } from "@/components/ui/PencilButton";
 import { useCountdown } from "@/lib/deadline/useNow";
 import type { DisplaySquare } from "@/lib/game/boardState";
 import { MAX_PLAYERS, type Game, type Player } from "@/lib/game/types";
@@ -26,43 +24,29 @@ function Tag({ children }: { children: string }) {
 }
 
 /**
- * Everyone in the game, how many squares each crossed off, the deadline and
- * (host only) Extend deadline, once, and End game. Both are enforced in SQL
- * (`extend_deadline`, `end_game`); non-hosts never see them.
+ * Everyone in the game, how many squares each crossed off, and the deadline.
+ * The host's controls (Extend deadline, End game) live in Settings → Host.
  */
 export function PlayersSheetBody({
   game,
   players,
   board,
   meId,
-  isHost,
   theme,
-  ending,
-  error,
-  onEndGame,
-  onExtend,
 }: {
   game: Game;
   players: Player[];
   board: DisplaySquare[];
   meId: string | null;
-  isHost: boolean;
   /** Player-color shade for the board's theme. */
   theme: PaletteTheme;
-  ending: boolean;
-  error: string | null;
-  onEndGame: () => void;
-  /** Opens the host's extend sheet. */
-  onExtend?: () => void;
 }) {
-  const [confirming, setConfirming] = useState(false);
   const counts = new Map<string, number>();
   for (const square of board) {
     const by = square.completed_by_player_id;
     if (by && square.completed_at) counts.set(by, (counts.get(by) ?? 0) + 1);
   }
   const ends = useDeadlineLine(game.deadline_at);
-  const extended = (game.deadline_extended_at ?? null) !== null;
 
   return (
     <div className="flex min-w-0 flex-col gap-[14px] pb-2" data-testid="players-sheet-body">
@@ -92,45 +76,6 @@ export function PlayersSheetBody({
         <p className="text-lg leading-7 text-ink-soft" data-testid="auto-end">
           {ends}
         </p>
-      ) : null}
-
-      {isHost ? (
-        <div className="flex min-w-0 flex-col gap-2 border-t-2 border-dashed border-ink-faint pt-[14px]">
-          {confirming ? (
-            <>
-              <p className="text-xl leading-7">End the game for everyone? The board locks and the album opens.</p>
-              <div className="flex flex-wrap items-center gap-3">
-                <PencilButton onClick={onEndGame} busy={ending} data-testid="end-game-confirm">
-                  End game
-                </PencilButton>
-                <PencilButton variant="quiet" onClick={() => setConfirming(false)} data-testid="end-game-cancel">
-                  Keep playing
-                </PencilButton>
-              </div>
-            </>
-          ) : (
-            <div className="flex min-w-0 flex-wrap items-center gap-3">
-              {!extended && onExtend ? (
-                <PencilButton variant="secondary" onClick={onExtend} data-testid="extend-deadline">
-                  Extend deadline
-                </PencilButton>
-              ) : null}
-              <PencilButton variant="secondary" onClick={() => setConfirming(true)} data-testid="end-game">
-                End game
-              </PencilButton>
-            </div>
-          )}
-          {extended && !confirming ? (
-            <p className="text-lg leading-7 text-ink-soft" data-testid="deadline-extended">
-              Deadline extended once
-            </p>
-          ) : null}
-          {error ? (
-            <p role="alert" className="text-lg leading-7 text-danger" data-testid="end-game-error">
-              {error}
-            </p>
-          ) : null}
-        </div>
       ) : null}
     </div>
   );

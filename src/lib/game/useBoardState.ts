@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { track } from "@/lib/analytics";
+import { isBlackout } from "@/lib/game/bingo";
 import { deriveBoard, type DisplaySquare } from "@/lib/game/boardState";
 import {
   createPendingActions,
@@ -39,6 +40,20 @@ function trackCompletion(settled: Settled, squares: readonly Square[]) {
   if (outcome !== "applied" || action.kind === "undo" || !row || row.completed_at === null) return;
   const done = squares.filter((s) => (s.position === row.position ? row : s).completed_at !== null).length;
   track("square_completed", { counter: row.target_count > 1, total_completed: done });
+}
+
+/**
+ * The settled row leaves no square open: the server has just ended the game
+ * (`end_reason = 'blackout'`, in the same transaction as the 25th completion,
+ * whoever made it), so the ended games row is fetched at once instead of
+ * waiting for the next poll or Realtime event.
+ */
+export function settledIntoBlackout(squares: readonly Square[], row: Square | null): boolean {
+  if (!row || row.completed_at === null) return false;
+  const merged = squares.some((s) => s.position === row.position)
+    ? squares.map((s) => (s.position === row.position ? row : s))
+    : [...squares, row];
+  return isBlackout(merged);
 }
 
 /** One queue per game (per tab), so nothing held for one game can leak into another. */
@@ -150,7 +165,7 @@ export function useBoardState(
         const { applySquare, refresh, onSettled } = optionsRef.current;
         if (settled.row) applySquare?.(settled.row);
         trackCompletion(settled, squaresRef.current);
-        if (settled.outcome === "failed") void refresh?.();
+        if (settled.outcome === "failed" || settledIntoBlackout(squaresRef.current, settled.row)) void refresh?.();
         onSettled?.(settled);
       }),
     [store, gameId],

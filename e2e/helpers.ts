@@ -1,7 +1,14 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, type Browser, type BrowserContext, type BrowserContextOptions, type Page } from "@playwright/test";
+import {
+  expect,
+  type APIRequestContext,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Page,
+} from "@playwright/test";
 
 /**
  * Shared two-phone setup for the live-board specs. The local backend never
@@ -91,13 +98,63 @@ export async function twoPhonesInLobby(browser: Browser, options: TwoPhoneOption
   };
 }
 
-/** The host taps Start; resolves once both phones show the live board. */
+/** start_game's shared countdown before the board appears (countdown_ends_at = start + 5 s). */
+export const START_COUNTDOWN_MS = 5_000;
+
+/**
+ * After Start: the phone has seen the game go live (the countdown screen says
+ * `data-status="active"`), the 5-second countdown has run out, the board is up
+ * and the start transition over it has finished, so the cells take taps.
+ */
+export async function waitForBoard(page: Page): Promise<void> {
+  await expect(page.getByTestId("game-screen")).toHaveAttribute("data-status", "active", { timeout: 5_000 });
+  await expect(page.getByTestId("board-grid")).toBeVisible({ timeout: START_COUNTDOWN_MS + 5_000 });
+  await expect(page.getByTestId("start-countdown")).toHaveCount(0);
+  await expect(page.getByTestId("start-transition")).toHaveCount(0, { timeout: 5_000 });
+}
+
+/** The host taps Start; resolves once both phones are past the countdown and show the live board. */
 export async function startGame(phones: Pick<TwoPhones, "host" | "friend">): Promise<void> {
   await phones.host.getByTestId("start-game").click();
-  for (const page of [phones.host, phones.friend]) {
-    await expect(page.getByTestId("game-screen")).toHaveAttribute("data-status", "active", { timeout: 5_000 });
-    await expect(page.getByTestId("board-grid")).toBeVisible();
+  for (const page of [phones.host, phones.friend]) await waitForBoard(page);
+}
+
+/** Opens the board's Settings sheet (the host's Extend deadline / End game live in its Host section). */
+export async function openSettings(page: Page): Promise<void> {
+  await page.getByTestId("settings-button").click();
+  const sheet = page.getByTestId("settings-sheet");
+  await expect(sheet).toBeVisible();
+  // Let the slide-up finish before callers measure positions inside the sheet.
+  await sheet
+    .evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)))
+    .catch(() => undefined);
+  await page.waitForTimeout(100);
+}
+
+/** The host ends the live game from Settings → Host → End game (with its confirm step). */
+export async function endGameFromSettings(page: Page): Promise<void> {
+  await openSettings(page);
+  await expect(page.getByTestId("settings-host")).toBeVisible();
+  await page.getByTestId("end-game").click();
+  await page.getByTestId("end-game-confirm").click();
+}
+
+/**
+ * A live end plays the end sequence (buzzer or blackout marquee, then the
+ * credits card) over the recap, for a few seconds: waits until it is gone,
+ * tapping the credits' Skip as soon as it shows unless `skip: false`.
+ */
+export async function waitForEndSequence(page: Page, { timeout = 15_000, skip = true } = {}): Promise<void> {
+  const sequence = page.getByTestId("end-sequence");
+  if (skip) {
+    const until = Date.now() + timeout;
+    const button = page.getByTestId("credits-skip");
+    while (Date.now() < until && (await sequence.count()) > 0) {
+      if (await button.isVisible().catch(() => false)) await button.click({ timeout: 1_000 }).catch(() => undefined);
+      await page.waitForTimeout(100);
+    }
   }
+  await expect(sequence).toHaveCount(0, { timeout });
 }
 
 /** Two phones that have reached an active game (Night Out pack unless told otherwise). */
@@ -271,4 +328,39 @@ export function setDeadlineViaDb(gameId: string, iso: string): void {
     encoding: "utf8",
   });
   expect(out.trim(), `setDeadlineViaDb(${gameId})`).toBe(gameId);
+}
+
+/**
+ * A fresh anonymous user straight from the auth server, with no browser or page load: the
+ * cheap way to fill a game with players (e.g. ten for a full game). Needs anonymous sign-ins
+ * enabled, as the app itself does.
+ */
+export async function anonUser(request: APIRequestContext): Promise<{ token: string; userId: string }> {
+  const env = publicSupabaseEnv();
+  if (!env) throw new Error("NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+  const res = await request.post(`${env.url}/auth/v1/signup`, {
+    headers: { apikey: env.anonKey, "Content-Type": "application/json" },
+    data: {},
+  });
+  expect(res.ok(), `anonymous sign-in: ${res.status()} ${await res.text()}`).toBe(true);
+  const body = (await res.json()) as { access_token?: string; user?: { id?: string } };
+  expect(body.access_token, "access token").toBeTruthy();
+  return { token: body.access_token!, userId: body.user?.id ?? "" };
+}
+
+/** Calls an RPC with a bare access token (from `anonUser`); same RLS / security definer checks as the app. */
+export async function rpcWithToken<T>(
+  request: APIRequestContext,
+  token: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<T> {
+  const env = publicSupabaseEnv();
+  if (!env) throw new Error("NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY not set");
+  const res = await request.post(`${env.url}/rest/v1/rpc/${name}`, {
+    headers: { apikey: env.anonKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    data: args,
+  });
+  expect(res.ok(), `${name}: ${res.status()} ${await res.text()}`).toBe(true);
+  return (await res.json()) as T;
 }

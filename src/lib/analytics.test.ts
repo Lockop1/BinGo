@@ -61,6 +61,13 @@ describe("sanitizeEventProps", () => {
     expect(sanitizeEventProps("play_again", { source: "home" })).toEqual({});
   });
 
+  it("knows every way a game ends", () => {
+    for (const by of ["host", "auto", "blackout"]) {
+      expect(sanitizeEventProps("game_ended", { by, blackout: by === "blackout" })).toEqual({ by, blackout: by === "blackout" });
+    }
+    expect(sanitizeEventProps("game_ended", { by: "deadline" })).toEqual({});
+  });
+
   it("rounds counts to whole numbers", () => {
     expect(sanitizeEventProps("game_ended", { duration_min: 92.6, lines: 2 })).toEqual({ duration_min: 93, lines: 2 });
   });

@@ -158,7 +158,14 @@ function toFailure(error: unknown): UploadFailure {
   const gameError = toGameError(error);
   // `unknown` = network trouble or an unexpected response; `not_authenticated` = no session yet (offline sign-in).
   const retryable = gameError.code === "unknown" || gameError.code === "not_authenticated";
-  return new UploadFailure(retryable ? UPLOAD_COPY.network : gameError.message, gameError.code, retryable);
+  // `not_allowed` here means register_media refused post-game media (not the uploader's square and the
+  // grace window is over): show the upload copy, not the undo copy that code carries elsewhere.
+  const copy = retryable
+    ? UPLOAD_COPY.network
+    : gameError.code === "not_allowed"
+      ? UPLOAD_COPY.denied
+      : gameError.message;
+  return new UploadFailure(copy, gameError.code, retryable);
 }
 
 export function createUploadQueue(deps: UploadQueueDeps): UploadQueue {

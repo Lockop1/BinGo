@@ -11,10 +11,9 @@ import { PlayerList } from "@/components/lobby/PlayerList";
 import { SquareEditor } from "@/components/lobby/SquareEditor";
 import { toSquareInput, type SquareFields } from "@/components/lobby/squareFields";
 import { Sheet } from "@/components/ui/Sheet";
-import { Toggle } from "@/components/ui/Toggle";
 import { track } from "@/lib/analytics";
 import { errorCopy, toGameError } from "@/lib/game/errors";
-import { removePlayer, setDeadline, setFreeCenter, setReady, startGame, updateSquare } from "@/lib/game/rpc";
+import { removePlayer, setDeadline, setReady, startGame, updateSquare } from "@/lib/game/rpc";
 import { useCountdown } from "@/lib/deadline/useNow";
 import { BOARD_SIZE, CENTER_POSITION, type Game, type Player, type Square } from "@/lib/game/types";
 import type { SyncState } from "@/lib/game/useGame";
@@ -66,13 +65,11 @@ export function Lobby({
 
   const seq = useRef(0);
   const [readyOverlay, setReadyOverlay] = useState<Overlay<boolean> | null>(null);
-  const [freeOverlay, setFreeOverlay] = useState<Overlay<boolean> | null>(null);
   const [squareOverlays, setSquareOverlays] = useState<Record<number, Overlay<SquareFields>>>({});
   const [editing, setEditing] = useState<Editing | null>(null);
   const [centerOpen, setCenterOpen] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
   const [dockError, setDockError] = useState<string | null>(null);
-  const [freeError, setFreeError] = useState<string | null>(null);
   const [deadlineOverlay, setDeadlineOverlay] = useState<Overlay<string> | null>(null);
   const [deadlineError, setDeadlineError] = useState<string | null>(null);
   const editingRef = useRef<Editing | null>(null);
@@ -84,7 +81,8 @@ export function Lobby({
     setEditing(next);
   };
 
-  const freeCenter = freeOverlay?.value ?? game.free_center;
+  // Chosen on the Create screen only; the lobby just shows it (no control for anyone).
+  const freeCenter = game.free_center;
   const deadlineIso = deadlineOverlay?.value ?? game.deadline_at;
   // Ticks when the countdown label changes (at the deadline itself in the last minute), so
   // "Passed" and the Start lock appear on time. Null until mounted: never "passed" on the server.
@@ -130,19 +128,6 @@ export function Lobby({
       if (readySeq.current === id) setDockError(failed(error));
     } finally {
       setReadyOverlay((o) => (o?.seq === id ? null : o));
-    }
-  };
-
-  const toggleFree = async (enabled: boolean) => {
-    const id = ++seq.current;
-    setFreeOverlay({ value: enabled, seq: id });
-    setFreeError(null);
-    try {
-      applyGame(await setFreeCenter({ game_id: game.id, enabled }));
-    } catch (error) {
-      setFreeError(failed(error));
-    } finally {
-      setFreeOverlay((o) => (o?.seq === id ? null : o));
     }
   };
 
@@ -229,7 +214,6 @@ export function Lobby({
 
   const selectSquare = (position: number) => {
     if (position === CENTER_POSITION && freeCenter) {
-      setFreeError(null);
       setCenterOpen(true);
       return;
     }
@@ -266,25 +250,6 @@ export function Lobby({
         onRemove={isHost ? (player) => void remove(player) : undefined}
         removeError={removeError}
       />
-
-      {isHost ? (
-        <section className="mt-[28px] min-w-0" aria-label="Host settings">
-          <Toggle
-            checked={freeCenter}
-            onChange={(enabled) => void toggleFree(enabled)}
-            busy={freeOverlay !== null}
-            label="Free space in the center"
-            description={freeCenter ? "Starts crossed off for everyone." : "The center is a normal square."}
-            testId="free-center-toggle"
-          />
-        </section>
-      ) : null}
-      {/* Shown to anyone: a rejected free-space change (e.g. not_host) gets its copy. */}
-      {freeError && !centerOpen ? (
-        <p role="alert" className="text-lg leading-7 text-danger" data-testid="free-center-error">
-          {freeError}
-        </p>
-      ) : null}
 
       <LobbyBoard squares={board} freeCenter={freeCenter} onSelect={selectSquare} />
 
@@ -327,19 +292,8 @@ export function Lobby({
         ) : null}
       </Sheet>
 
-      <Sheet open={centerOpen} onClose={() => setCenterOpen(false)} title="Free space" testId="free-space-sheet">
-        <FreeSpaceInfo
-          isHost={isHost}
-          hostName={hostName}
-          freeCenter={freeCenter}
-          busy={freeOverlay !== null}
-          error={freeError}
-          onToggle={(enabled) => {
-            void toggleFree(enabled);
-            // Turning it off makes the center editable: close so the player can tap it.
-            if (!enabled) setCenterOpen(false);
-          }}
-        />
+      <Sheet open={centerOpen && freeCenter} onClose={() => setCenterOpen(false)} title="Free space" testId="free-space-sheet">
+        <FreeSpaceInfo />
       </Sheet>
     </div>
   );

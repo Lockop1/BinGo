@@ -1,6 +1,6 @@
 import { gunzipSync } from "node:zlib";
 import { expect, test, type BrowserContext, type Page, type Request } from "@playwright/test";
-import { LIVE, startGame, twoPhonesInLobby } from "./helpers";
+import { LIVE, endGameFromSettings, startGame, twoPhonesInLobby } from "./helpers";
 
 /**
  * Product analytics (src/lib/analytics.ts) end to end. Needs a dev server started with
@@ -182,9 +182,7 @@ test("product events carry only allow-listed counts, never personal data", async
   expect(completed.properties).toMatchObject({ counter: false, total_completed: 2 }); // square 0 + FREE
 
   // End the game (host).
-  await host.getByTestId("players-button").click();
-  await host.getByTestId("end-game").click();
-  await host.getByTestId("end-game-confirm").click();
+  await endGameFromSettings(host);
   await expect(host.getByTestId("game-screen")).toHaveAttribute("data-status", "ended", LIVE);
   await waitFor(hostCap, "game_ended");
   const [ended] = named(hostCap, "game_ended");

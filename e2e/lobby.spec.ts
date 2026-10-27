@@ -103,22 +103,20 @@ test("host and friend edit the board live, ready up and start", async ({ browser
   await expect(host.getByTestId("square-sheet")).toBeHidden();
   await expect(friend.getByTestId("square-1")).toContainText("Mine", LIVE);
 
-  // Non-host tapping the free center gets an explanation, not an editor.
-  await friend.getByTestId("square-12").click();
-  await expect(friend.getByTestId("free-space-info")).toContainText("can turn it off");
-  await expect(friend.getByTestId("free-center-sheet-toggle")).toHaveCount(0);
-  await friend.keyboard.press("Escape");
-  await expect(friend.getByTestId("free-space-sheet")).toBeHidden();
-
-  // Host turns the free space off: the friend's center becomes a normal square.
-  await host.getByTestId("free-center-toggle").click();
-  await expect(host.getByTestId("free-center-toggle")).toHaveAttribute("aria-checked", "false");
-  await expect(friend.getByTestId("square-12")).toHaveAttribute("data-free", "false", LIVE);
-  await friend.getByTestId("square-12").click();
-  await expect(friend.getByTestId("square-sheet")).toBeVisible();
-  await expect(friend.getByTestId("square-label")).toBeVisible();
-  await friend.getByTestId("sheet-close").click();
-  await expect(friend.getByTestId("square-sheet")).toBeHidden();
+  // Free space is chosen on the Create screen only: no control in the lobby for anyone.
+  // Tapping the free center explains that, on both phones, instead of opening an editor.
+  for (const page of [host, friend]) {
+    await expect(page.getByTestId("free-center-toggle")).toHaveCount(0);
+    await expect(page.getByRole("switch")).toHaveCount(0);
+    await page.getByTestId("square-12").click();
+    const info = page.getByTestId("free-space-info");
+    await expect(info).toContainText("Free space was set when the game was created.");
+    await expect(page.getByTestId("free-space-sheet").getByRole("switch")).toHaveCount(0);
+    await expect(page.getByTestId("free-space-sheet").getByRole("checkbox")).toHaveCount(0);
+    await expect(page.getByTestId("square-sheet")).toBeHidden();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("free-space-sheet")).toBeHidden();
+  }
 
   // Start stays disabled until everyone (host included) is ready.
   const start = host.getByTestId("start-game");
@@ -140,8 +138,40 @@ test("host and friend edit the board live, ready up and start", async ({ browser
     await expect(page.getByTestId("game-screen")).toHaveAttribute("data-status", "active", LIVE);
     await expect(page.getByTestId("lobby")).toHaveCount(0);
     await expect(page.getByTestId("board-grid")).toBeVisible();
+    // start_game completed the free center chosen at creation.
+    await expect(page.getByTestId("cell-12")).toHaveAttribute("data-free", "true");
+    await expect(page.getByTestId("cell-12")).toHaveAttribute("data-completed", "true");
   }
 
   await hostContext.close();
   await friendContext.close();
+});
+
+test("a game created without the free space has a normal, editable center", async ({ page }) => {
+  const gameName = `E2E NoFree ${Date.now().toString(36)}`;
+  await page.goto("/new");
+  await page.waitForLoadState("networkidle");
+  const create = page.getByTestId("create-game");
+  await expect(async () => {
+    await page.getByTestId("game-name").fill(gameName);
+    await page.getByTestId("host-name").fill("Hosty");
+    await expect(create).toBeEnabled({ timeout: 1_000 });
+  }).toPass();
+  await page.getByTestId("pack-blank").click();
+  await page.getByTestId("free-center").uncheck({ force: true });
+  await expect(page.getByTestId("free-center")).not.toBeChecked();
+  await create.click();
+  await expect(page.getByTestId("lobby")).toBeVisible();
+
+  const center = page.getByTestId("square-12");
+  await expect(center).toHaveAttribute("data-free", "false");
+  await expect(center).not.toContainText("FREE");
+  await center.click();
+  await expect(page.getByTestId("square-sheet")).toBeVisible();
+  await expect(page.getByTestId("free-space-sheet")).toBeHidden();
+  await page.getByTestId("square-label").fill("Middle of it all");
+  await page.getByTestId("square-save").click();
+  await expect(page.getByTestId("square-sheet")).toBeHidden();
+  await expect(center).toContainText("Middle of it all");
+  await expectNoHorizontalScroll(page);
 });

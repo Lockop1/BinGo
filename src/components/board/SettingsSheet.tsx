@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useRef, type KeyboardEvent } from "react";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { useDeadlineLine } from "@/components/board/PlayersSheet";
+import { PencilButton } from "@/components/ui/PencilButton";
 import type { Game } from "@/lib/game/types";
 import type { BoardTheme, Settings, SquareSize, TextSize } from "@/lib/settings/settings";
 
@@ -90,6 +91,73 @@ function Segmented<T extends string>({
 
 const THEME_LABEL: Record<BoardTheme, string> = { scoreboard: "Dark Scoreboard", whiteboard: "Whiteboard" };
 
+/** The host's game controls (BoardScreen passes them only on the host's phone). */
+export type HostControls = {
+  /** `end_game` is in flight. */
+  ending: boolean;
+  /** Copy for the last failed `end_game`. */
+  error: string | null;
+  onEndGame: () => void;
+  /** Opens the extend sheet (once per game; hidden after `deadline_extended_at` is set). */
+  onExtend: () => void;
+};
+
+/**
+ * "Host": Extend deadline (once) and End game (with a confirm step). The RPCs
+ * enforce both (`extend_deadline`, `end_game`: host only, live only, once);
+ * nobody else's Settings ever shows this.
+ */
+function HostSection({ game, host }: { game: Game; host: HostControls }) {
+  const headingId = useId();
+  const [confirming, setConfirming] = useState(false);
+  const extended = (game.deadline_extended_at ?? null) !== null;
+  return (
+    <section
+      aria-labelledby={headingId}
+      data-testid="settings-host"
+      className="flex min-w-0 flex-col gap-2 border-b-2 border-dashed border-ink-faint pb-[14px]"
+    >
+      <h3 id={headingId} className="text-xl leading-7">
+        Host
+      </h3>
+      {confirming ? (
+        <>
+          <p className="text-xl leading-7">End the game for everyone? The board locks and the album opens.</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <PencilButton onClick={host.onEndGame} busy={host.ending} data-testid="end-game-confirm">
+              End game
+            </PencilButton>
+            <PencilButton variant="quiet" onClick={() => setConfirming(false)} data-testid="end-game-cancel">
+              Keep playing
+            </PencilButton>
+          </div>
+        </>
+      ) : (
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          {!extended ? (
+            <PencilButton variant="secondary" onClick={host.onExtend} data-testid="extend-deadline">
+              Extend deadline
+            </PencilButton>
+          ) : null}
+          <PencilButton variant="secondary" onClick={() => setConfirming(true)} data-testid="end-game">
+            End game
+          </PencilButton>
+        </div>
+      )}
+      {extended && !confirming ? (
+        <p className="text-lg leading-7 text-ink-soft" data-testid="deadline-extended">
+          Deadline extended once
+        </p>
+      ) : null}
+      {host.error ? (
+        <p role="alert" className="text-lg leading-7 text-danger" data-testid="end-game-error">
+          {host.error}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 const TEXT_OPTIONS: Option<TextSize>[] = [
   { value: "normal", label: "Normal", size: "1.0625rem" },
   { value: "large", label: "Large", size: "1.25rem" },
@@ -102,10 +170,11 @@ const SQUARE_OPTIONS: Option<SquareSize>[] = [
 ];
 
 /**
- * The three board settings, for this phone only. Changes show on the board
- * behind the sheet straight away and are saved (lib/settings). The theme
- * follows the phone until another one is picked; then a link brings the
- * phone's choice back.
+ * The board's menu. On the host's phone it opens with the "Host" section
+ * (Extend deadline, End game); then the three board settings, for this phone
+ * only. Changes show on the board behind the sheet straight away and are
+ * saved (lib/settings). The theme follows the phone until another one is
+ * picked; then a link brings the phone's choice back.
  */
 export function SettingsSheetBody({
   game,
@@ -113,6 +182,7 @@ export function SettingsSheetBody({
   theme,
   systemTheme,
   onChange,
+  host,
 }: {
   game: Game;
   settings: Settings;
@@ -120,6 +190,8 @@ export function SettingsSheetBody({
   theme: BoardTheme;
   systemTheme: BoardTheme;
   onChange: (patch: Partial<Settings>) => void;
+  /** Only on the host's phone: the Host section's controls. */
+  host?: HostControls;
 }) {
   const ends = useDeadlineLine(game.deadline_at);
   const themeOptions: Option<BoardTheme>[] = (["scoreboard", "whiteboard"] as const).map((value) => ({
@@ -130,6 +202,7 @@ export function SettingsSheetBody({
 
   return (
     <div className="flex min-w-0 flex-col gap-[18px] pb-2" data-testid="settings-sheet-body">
+      {host ? <HostSection game={game} host={host} /> : null}
       <div className="flex min-w-0 flex-col gap-1">
         <Segmented
           label="Board theme"

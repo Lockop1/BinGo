@@ -11,9 +11,11 @@ export type Database = {
     Tables: {
       "games": {
         Row: {
+          "countdown_ends_at": string | null;
           "created_at": string;
           "deadline_at": string;
           "deadline_extended_at": string | null;
+          "end_reason": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -29,9 +31,11 @@ export type Database = {
         };
         ComputedFields: never;
         Insert: {
+          "countdown_ends_at"?: string | null;
           "created_at"?: string;
           "deadline_at": string;
           "deadline_extended_at"?: string | null;
+          "end_reason"?: string | null;
           "ended_at"?: string | null;
           "expires_at"?: string;
           "free_center"?: boolean;
@@ -46,9 +50,11 @@ export type Database = {
           "updated_at"?: string;
         };
         Update: {
+          "countdown_ends_at"?: string | null;
           "created_at"?: string;
           "deadline_at"?: string;
           "deadline_extended_at"?: string | null;
+          "end_reason"?: string | null;
           "ended_at"?: string | null;
           "expires_at"?: string;
           "free_center"?: boolean;
@@ -349,9 +355,11 @@ export type Database = {
           "squares"?: Json;
         };
         Returns: {
+          "countdown_ends_at": string | null;
           "created_at": string;
           "deadline_at": string;
           "deadline_extended_at": string | null;
+          "end_reason": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -377,9 +385,11 @@ export type Database = {
           "game_id": string;
         };
         Returns: {
+          "countdown_ends_at": string | null;
           "created_at": string;
           "deadline_at": string;
           "deadline_extended_at": string | null;
+          "end_reason": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -406,9 +416,11 @@ export type Database = {
           "game_id": string;
         };
         Returns: {
+          "countdown_ends_at": string | null;
           "created_at": string;
           "deadline_at": string;
           "deadline_extended_at": string | null;
+          "end_reason": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -511,9 +523,11 @@ export type Database = {
           "game_id": string;
         };
         Returns: {
+          "countdown_ends_at": string | null;
           "created_at": string;
           "deadline_at": string;
           "deadline_extended_at": string | null;
+          "end_reason": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -576,9 +590,11 @@ export type Database = {
           "game_id": string;
         };
         Returns: {
+          "countdown_ends_at": string | null;
           "created_at": string;
           "deadline_at": string;
           "deadline_extended_at": string | null;
+          "end_reason": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -605,9 +621,11 @@ export type Database = {
           "game_id": string;
         };
         Returns: {
+          "countdown_ends_at": string | null;
           "created_at": string;
           "deadline_at": string;
           "deadline_extended_at": string | null;
+          "end_reason": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;
@@ -654,9 +672,11 @@ export type Database = {
           "game_id": string;
         };
         Returns: {
+          "countdown_ends_at": string | null;
           "created_at": string;
           "deadline_at": string;
           "deadline_extended_at": string | null;
+          "end_reason": string | null;
           "ended_at": string | null;
           "expires_at": string;
           "free_center": boolean;

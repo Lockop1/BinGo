@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { LIVE, expectPageFitsWidth, publicSupabaseEnv, rpcAs, selectAs, twoPhonesInActiveGame } from "./helpers";
+import {
+  LIVE,
+  endGameFromSettings,
+  expectPageFitsWidth,
+  publicSupabaseEnv,
+  rpcAs,
+  selectAs,
+  twoPhonesInActiveGame,
+} from "./helpers";
 
 /**
  * "Play again" on the recap: a quiet text link at the very bottom of the
@@ -120,9 +128,7 @@ test("play again: a quiet link on the recap starts a rematch lobby with the same
   expect(oldSquares.filter((s) => s.completed_at !== null).length, "played squares").toBeGreaterThanOrEqual(2);
 
   await test.step("the host ends the game: both recaps, nothing rematch-y but a small link", async () => {
-    await host.getByTestId("players-button").click();
-    await host.getByTestId("end-game").click();
-    await host.getByTestId("end-game-confirm").click();
+    await endGameFromSettings(host);
     for (const page of [host, friend]) {
       await expect(page.getByTestId("recap-summary")).toBeVisible(LIVE);
       await expect(page.getByTestId("recap-download-all")).toBeVisible();

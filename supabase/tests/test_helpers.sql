@@ -214,8 +214,24 @@ begin
 end;
 $$;
 
--- Readies every player and starts the game as the host. Leaves session as postgres.
-create function tests.start_game(f tests.fixture) returns void
+-- Ends a game's start countdown now (call as postgres: logout first). now() is
+-- fixed for the whole test transaction, so instead of waiting 5 seconds the
+-- countdown end moves back to now() (countdown_ends_at > now() is then false).
+-- Bypasses the RPCs on purpose. Also used by the *.test.sh files, whose
+-- sessions see real time. Returns the new countdown end.
+create function tests.pass_countdown(game_id uuid) returns timestamptz
+language sql as $$
+  update public.games g
+  set countdown_ends_at = least(g.countdown_ends_at, now())
+  where g.id = pass_countdown.game_id
+  returning g.countdown_ends_at;
+$$;
+
+-- Readies every player and starts the game as the host. Leaves session as
+-- postgres. By default the 5-second start countdown is skipped
+-- (tests.pass_countdown), so squares can be completed straight away; pass
+-- skip_countdown => false to test the countdown itself.
+create function tests.start_game(f tests.fixture, skip_countdown boolean default true) returns void
 language plpgsql as $$
 begin
   for i in 1..coalesce(array_length(f.users, 1), 0) loop
@@ -225,6 +241,9 @@ begin
   perform tests.login(f.users[1]);
   perform public.start_game(f.game_id);
   perform tests.logout();
+  if skip_countdown then
+    perform tests.pass_countdown(f.game_id);
+  end if;
 end;
 $$;
 
@@ -244,4 +263,26 @@ language sql as $$
       deadline_at = now() - pass_deadline.ago
   where g.id = pass_deadline.game_id
   returning g.deadline_at;
+$$;
+
+-- Time travel past a game's end (call as postgres: logout first): ended_at =
+-- now() - ago, with created_at / started_at / countdown_ends_at at least an
+-- hour before that, so the table's checks still hold. Ended games only.
+-- Returns the new ended_at.
+create function tests.pass_end(game_id uuid, ago interval) returns timestamptz
+language sql as $$
+  update public.games g
+  set created_at = least(g.created_at, now() - pass_end.ago - interval '1 hour'),
+      started_at = case
+        when g.started_at is null then null
+        else least(g.started_at, now() - pass_end.ago - interval '1 hour')
+      end,
+      countdown_ends_at = case
+        when g.countdown_ends_at is null then null
+        else least(g.countdown_ends_at, now() - pass_end.ago - interval '1 hour')
+      end,
+      ended_at = now() - pass_end.ago
+  where g.id = pass_end.game_id
+    and g.status = 'ended'
+  returning g.ended_at;
 $$;

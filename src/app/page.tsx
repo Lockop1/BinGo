@@ -1,4 +1,5 @@
 import { Plus } from "lucide-react";
+import { HomeJoin } from "@/components/home/HomeJoin";
 import { InstantReturn } from "@/components/home/InstantReturn";
 import { YourGames } from "@/components/home/YourGames";
 import { PaperPage, PaperTitle } from "@/components/paper/PaperPage";
@@ -16,7 +17,8 @@ export default function Home() {
           <Plus aria-hidden className="size-6" strokeWidth={2.5} />
           New game
         </PencilLink>
-        <section className="mt-[56px] flex min-w-0 flex-col" aria-labelledby="your-games-heading">
+        <HomeJoin />
+        <section className="mt-[28px] flex min-w-0 flex-col" aria-labelledby="your-games-heading">
           <h2 id="your-games-heading" className="text-2xl leading-[28px] text-ink-soft">
             Your games
           </h2>

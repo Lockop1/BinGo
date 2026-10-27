@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   LIVE,
+  endGameFromSettings,
   expectFitsWidth,
   expectPageFitsWidth,
   publicSupabaseEnv,
@@ -107,9 +108,7 @@ test("media wiring: sheet gating, empty album, recap on end", async ({ browser }
   }
 
   // --- The host ends the game: both phones land on the recap.
-  await host.getByTestId("players-button").click();
-  await host.getByTestId("end-game").click();
-  await host.getByTestId("end-game-confirm").click();
+  await endGameFromSettings(host);
 
   for (const page of [host, friend]) {
     await expect(page.getByTestId("game-screen")).toHaveAttribute("data-status", "ended", LIVE);
@@ -214,9 +213,7 @@ test("media wiring: a registered photo reaches the strip, the album, a toast and
   await expect(host.getByTestId("recap-story")).toHaveCount(0);
 
   // End: the recap offers the story and the download instead of the no-media copy.
-  await host.getByTestId("players-button").click();
-  await host.getByTestId("end-game").click();
-  await host.getByTestId("end-game-confirm").click();
+  await endGameFromSettings(host);
   for (const page of [host, friend]) {
     await expect(page.getByTestId("recap-summary")).toBeVisible(LIVE);
     await expect(page.getByTestId("recap-watch")).toBeVisible();

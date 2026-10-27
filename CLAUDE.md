@@ -24,17 +24,23 @@ for 30 days.
 - **Lobby** (pencil-on-notebook-paper theme) → host shares invite link (Web Share API + copy);
   joiners enter a display name only; everyone edits squares live and taps Ready; host taps
   Start when all are ready.
-- **Start transition** (~1s) from the paper lobby to the final board in the player's theme.
+- **Start countdown** (5 s, shared): after Start every phone counts down to the same server
+  timestamp (`countdown_ends_at`), then the **start transition** (~1s) goes from the paper lobby to
+  the final board in the player's theme, on every phone at once.
 - **Live board** → one shared 5×5 board; completing a square crosses it off for everyone with
   a toast ("Jake got Skyline Chili").
 - **Complete-square sheet**: full text + details, Complete (deliberate press), Add photo/video
   (camera-first), Share to group chat.
 - **Recap album** at game end: story-style swipe through squares with media and who completed
-  each; viewable/saveable for 30 days.
+  each; viewable/saveable for 30 days. "Your squares" lists what you crossed off, each with Add
+  photo/video, so shots can still be added after the end.
+- **Host controls** (Extend deadline, End game) live in Settings (the board's gear) → "Host", at the
+  top of the sheet, on the host's phone only.
 
 ### Game rules
 
-- 5×5 board; center defaults to a free space (host can turn it off).
+- 5×5 board; center defaults to a free space (the host can turn it off on the Create screen; the lobby
+  shows it but has no toggle).
 - Max 10 players, each with a distinct color from a 10-color palette readable on dark and
   light themes.
 - Lobby editing: any player edits any square, last write wins, label ≤40 chars, optional
@@ -42,9 +48,11 @@ for 30 days.
 - Optional counter squares (`target_count`, e.g. 15 signatures): sheet shows 3/15 with +1;
   completes at target; whoever hits the target gets credit.
 - Undo: the completer or the host.
-- Bingo: rows, columns, both diagonals (12 lines); each new line celebrates once; blackout
-  (25/25) gets a bigger celebration and prompts the host to end.
-- Only the host ends a game early; otherwise every game ends automatically at its **deadline**
+- Squares can be completed once the 5-second start countdown is over (`countdown_in_progress` before).
+- Bingo: rows, columns, both diagonals (12 lines); each new line celebrates once. **Blackout**
+  (25/25) ends the game at once, for everyone: the completion of the 25th square ends it on the
+  server in the same transaction (`end_reason = 'blackout'`); the board is final (no undo after).
+- Only the host ends a game early (or a blackout does); otherwise every game ends automatically at its **deadline**
   (`deadline_at`), for everyone at once. The host picks it when creating the game (presets
   "Tonight (3 AM)" (default), "24 hours", "This weekend (Sunday 11:59 PM)" or a custom date/time,
   computed on the phone in its time zone; 10 minutes to 7 days ahead) and can change it in the
@@ -136,7 +144,9 @@ These are invariants. Every phase must keep all of them true.
   in the lobby, default now + 24 h on the server), `deadline_extended_at` (null until the host's one
   live extension), `expires_at` (`created_at` + 30 days, whatever the deadline), `next_game_id` /
   `next_join_code` (set by `play_again`; the rematch lobby other players join with one tap),
-  `updated_at` (trigger-stamped on every update; clients drop older rows by it).
+  `updated_at` (trigger-stamped on every update; clients drop older rows by it),
+  `countdown_ends_at` (set by `start_game` to `started_at` + 5 s; null in a lobby),
+  `end_reason` (`host` | `deadline` | `blackout`; set exactly when `status = 'ended'`).
 - **players**: `id`, `game_id`, `user_id`, `display_name`, `color`, `is_ready`, `joined_at`;
   unique (`game_id`, `user_id`); max 10 per game.
 - **squares**: `id`, `game_id`, `position` 0–24, `label`, `details`, `target_count` default 1,
@@ -158,15 +168,15 @@ tables directly.
 | `set_ready` | player | lobby only |
 | `update_square` | player | lobby only; label ≤40, details ≤200; last write wins |
 | `set_deadline` | host only | lobby only; 10 min – 7 days ahead |
-| `start_game` | host only | lobby only; deadline not passed; all players ready; sets `started_at` (the deadline stays as set) |
-| `complete_square` | player | active only |
-| `increment_square` | player | active only; +1 per tap, idempotent per client action id; completes at `target_count`, credit to whoever hits it |
-| `undo_completion` | completer or host | active only |
+| `start_game` | host only | lobby only; deadline not passed; all players ready; sets `started_at` and the 5-second `countdown_ends_at` (the deadline stays as set) |
+| `complete_square` | player | active only, after the countdown; the 25th completion ends the game (blackout) |
+| `increment_square` | player | active only, after the countdown; +1 per tap, idempotent per client action id; completes at `target_count`, credit to whoever hits it; the 25th completion ends the game (blackout) |
+| `undo_completion` | completer or host | active only, after the countdown (never after a blackout: the game is over) |
 | `extend_deadline` | host only | active (and not past the deadline) only; once per game; later by at most 1 day |
-| `end_game` | host only | lobby or active (ending a lobby is how the host closes it); an overdue game ends at its deadline |
+| `end_game` | host only | lobby or active (ending a lobby is how the host closes it); an overdue game ends at its deadline; records `end_reason` |
 | `leave_game` | player (not the host) | lobby only; deletes the caller's player row |
 | `remove_player` | host only | lobby only; deletes another player's row (never the host's) |
-| `register_media` | player | records an uploaded object under the game's storage prefix |
+| `register_media` | player | records an uploaded object under the game's storage prefix; after the end only for your own squares (anyone's within 10 minutes of the end) |
 | `play_again` | player | ended (or overdue) games only; one rematch per game: creates (or returns) a new lobby with the same name, free center and board, hosted by the first caller; the old game points at it |
 | `peek_game_public(code)` | anyone, no session needed (`anon`) | link previews: name, effective status, player count, free center; unknown or expired codes are not found; the only function `anon` may execute |
 
@@ -273,6 +283,17 @@ Source of truth: `supabase/migrations/` (schema + RLS, RPCs, storage). Types: `s
   `ended = status === "ended" || (status === "active" && deadline_at <= now)` (`effectiveStatus` in
   `lib/game/types.ts`). `deadline_at` is never null; a lobby past its deadline stays a lobby (only
   `start_game` refuses it, with `deadline_passed`).
+- **Start countdown**: `start_game` sets `countdown_ends_at = now() + 5 s`. Until it passes the game
+  is `active` (joins, `extend_deadline`, `end_game` work as usual) but `complete_square`,
+  `increment_square` and `undo_completion` answer `countdown_in_progress` (checked right after
+  `game_not_active`). Phones show the countdown while `isInCountdown(game, now)` (`lib/game/types.ts`)
+  and the board from then on. `countdown_ends_at` is null in a lobby (a `play_again` rematch too) and
+  on games started before it existed (no countdown).
+- **End reason**: `end_reason` is set exactly when `status = 'ended'` (a table check): `'host'`
+  (`end_game` on a lobby or a live game), `'deadline'` (`end_game` on an overdue game, or the cron),
+  `'blackout'` (the completion of the 25th square). Games ended before the column existed were
+  backfilled (`'deadline'` when `ended_at >= deadline_at`, else `'host'`). An `active` game past its
+  deadline has no reason yet (null) until `end_game` or the cron ends it.
 - Errors are checked in the order listed in each row; the first failing check wins.
 
 ### Input rules (applied by the RPCs; the client may pre-validate with the same limits)
@@ -306,17 +327,17 @@ hours across a DST change. "7 days" and "1 day" in this file mean 168 and 24 hou
 | `update_square(game_id uuid, position integer, label text, details text, target_count integer)` | `squares` row | any player; `lobby` only; replaces label/details/target (last write wins), `current_count` reset to 0 | `not_authenticated`, `game_not_found`, `game_not_in_lobby`, `invalid_position`, `label_too_long`, `details_too_long`, `invalid_target_count` |
 | `set_free_center(game_id uuid, enabled boolean)` | `games` row | host only; `lobby` only | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `invalid_argument` (`enabled` null) |
 | `set_deadline(game_id uuid, deadline_at timestamptz)` | `games` row | host only; `lobby` only; replaces `deadline_at` (any number of times before the start); never touches `deadline_extended_at` or `expires_at` | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `invalid_deadline` (null, under 10 minutes or over 7 days (168 h) ahead) |
-| `start_game(game_id uuid)` | `games` row | host only; `lobby` only; the deadline must not have passed (`deadline_at > now()`; otherwise the host picks a new one with `set_deadline`); **every** player incl. the host must be ready. Sets `status = 'active'`, `started_at = now()`; `deadline_at` stays as set. If `free_center`: square 12 completed with `completed_by_player_id = null`, `current_count = target_count`, label `'FREE'` if blank | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `deadline_passed`, `players_not_ready` |
-| `complete_square(game_id uuid, position integer)` | `square_result` | any player; `active` only; only squares with `target_count = 1`. Already completed (by anyone, incl. free center) → `applied = false` + current row, **no error** | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `is_counter` (use `increment_square`) |
-| `increment_square(game_id uuid, position integer, action_id uuid = null)` | `square_result` | any player; `active` only; counter squares (`target_count > 1`). +1 under the square's row lock; reaching the target completes it and credits the caller. Already completed → `applied = false`. `action_id` is a client-generated UUID per tap, sent again unchanged on every retry of that tap: each id counts at most once (a repeat → `applied = false` + the current row, recorded in the internal `square_increments` log), while different ids always all count, so simultaneous and offline taps are never lost. `null` → a plain +1 with no retry protection. Either way, on `applied = false` adopt the returned row | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `not_counter` |
-| `undo_completion(game_id uuid, position integer)` | `square_result` | the completer or the host; `active` only. Clears completion; `current_count = target_count - 1` (0 for normal squares). Not completed → `applied = false`, no error. Free center (completed by nobody) can never be undone | `not_authenticated`, `game_not_found`, `game_not_active`, `invalid_position`, `not_allowed` |
-| `end_game(game_id uuid)` | `games` row | host only; from `lobby` **or** `active` (in the lobby it is the host's way out, since the host cannot `leave_game`); sets `status = 'ended'`, `ended_at` (= `deadline_at` if already overdue, else now). Already ended → returns row unchanged | `not_authenticated`, `game_not_found`, `not_host` |
+| `start_game(game_id uuid)` | `games` row | host only; `lobby` only; the deadline must not have passed (`deadline_at > now()`; otherwise the host picks a new one with `set_deadline`); **every** player incl. the host must be ready. Sets `status = 'active'`, `started_at = now()` and `countdown_ends_at = now() + 5 s` (completions wait for it); `deadline_at` stays as set. If `free_center`: square 12 completed with `completed_by_player_id = null`, `current_count = target_count`, label `'FREE'` if blank | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `deadline_passed`, `players_not_ready` |
+| `complete_square(game_id uuid, position integer)` | `square_result` | any player; `active` only, after the start countdown; only squares with `target_count = 1`. Already completed (by anyone, incl. free center) → `applied = false` + current row, **no error**  When the completion it applies leaves no square open (**blackout**), the game ends in the same transaction (`status = 'ended'`, `ended_at = now()` = that square's `completed_at`, `end_reason = 'blackout'`) and the call still returns the `square_result`; completions of one game take the game row lock one at a time (`for no key update`), so the last one always sees the others | `not_authenticated`, `game_not_found`, `game_not_active`, `countdown_in_progress`, `invalid_position`, `is_counter` (use `increment_square`) |
+| `increment_square(game_id uuid, position integer, action_id uuid = null)` | `square_result` | any player; `active` only, after the start countdown; counter squares (`target_count > 1`). +1 under the square's row lock; reaching the target completes it and credits the caller. Already completed → `applied = false`. `action_id` is a client-generated UUID per tap, sent again unchanged on every retry of that tap: each id counts at most once (a repeat → `applied = false` + the current row, recorded in the internal `square_increments` log), while different ids always all count, so simultaneous and offline taps are never lost. `null` → a plain +1 with no retry protection. Either way, on `applied = false` adopt the returned row  The +1 that completes the last open square ends the game (blackout), exactly as `complete_square` | `not_authenticated`, `game_not_found`, `game_not_active`, `countdown_in_progress`, `invalid_position`, `not_counter` |
+| `undo_completion(game_id uuid, position integer)` | `square_result` | the completer or the host; `active` only, after the start countdown (an ended game, a blackout included, is final: `game_not_active`). Clears completion; `current_count = target_count - 1` (0 for normal squares). Not completed → `applied = false`, no error. Free center (completed by nobody) can never be undone | `not_authenticated`, `game_not_found`, `game_not_active`, `countdown_in_progress`, `invalid_position`, `not_allowed` |
+| `end_game(game_id uuid)` | `games` row | host only; from `lobby` **or** `active` (in the lobby it is the host's way out, since the host cannot `leave_game`); sets `status = 'ended'`, `ended_at` (= `deadline_at` if already overdue, else now) and `end_reason` (`'deadline'` if already overdue, else `'host'`). Already ended (by anything, a blackout included) → returns row unchanged | `not_authenticated`, `game_not_found`, `not_host` |
 | `extend_deadline(game_id uuid, deadline_at timestamptz)` | `games` row | host only; the game must be live: `active` **and** `deadline_at > now()` (a game already past its deadline is over and cannot be revived); once per game. Under the game row lock sets `deadline_at` to the new value and `deadline_extended_at = now()`; `expires_at` unchanged | `not_authenticated`, `game_not_found`, `not_host`, `game_not_active` (lobby, ended or past the deadline), `already_extended`, `invalid_deadline` (null, not later than the current deadline, or more than 24 hours later) |
 | `leave_game(game_id uuid)` | `boolean` (`true`) | any player except the host; `lobby` only. Deletes the caller's `players` row under the game lock (like `join_game`), freeing the slot and color for the next joiner. The caller is then a non-member (RLS hides the game); they may join again with the code | `not_authenticated`, `game_not_found`, `game_not_in_lobby`, `host_cannot_leave` |
 | `remove_player(game_id uuid, player_id uuid)` | `boolean` (`true`) | host only; `lobby` only. Deletes another player's row under the game lock (e.g. someone who wandered off without tapping Ready), so `start_game` is no longer blocked by them | `not_authenticated`, `game_not_found`, `not_host`, `game_not_in_lobby`, `not_allowed` (removing yourself), `player_not_found` (not a player of this game, e.g. already left) |
-| `play_again(game_id uuid)` | `games` row (the **new** game) | any player of the old game; the old game must be effectively ended (`ended`, or `active` past `deadline_at`). Under the old game's row lock: if `next_game_id` is set and that game still exists, returns it unchanged (one rematch per game, whoever asks; a later caller is **not** joined, they `join_game(next_join_code, …)`). Otherwise creates a lobby exactly like `create_game` without a deadline (fresh join code, `expires_at`, `deadline_at = now() + 24 h` for the host to edit in the lobby, `deadline_extended_at = null`, 25 squares) with the same `name` and `free_center`, squares copied by position (`label`, `details`, `target_count`; `current_count = 0`, nothing completed, no media; a free center that `start_game` labelled `'FREE'` goes back to blank), the caller as host and player color 0 under their `display_name` from the old game, `is_ready = false`; then sets the old row's `next_game_id` / `next_join_code` (members see it via RLS, Realtime and resync) | `not_authenticated`, `game_not_found`, `game_not_ended`, `join_code_generation_failed` (practically never) |
-| `register_media(game_id uuid, position integer, storage_path text, kind text)` | `media` row | any player; game `active` or `ended`, before `expires_at`; square must be completed. `storage_path` = `<game_id>/<segments>` where each segment matches `[A-Za-z0-9_-][A-Za-z0-9._-]*`, max 512 chars; `kind` is `'photo'` or `'video'`. Same path again by the same player/square → returns the existing row | `not_authenticated`, `game_not_found`, `game_not_started` (lobby), `game_expired`, `invalid_kind`, `invalid_storage_path`, `invalid_position`, `square_not_completed`, `invalid_storage_path` (path already used by someone else) |
-| `auto_end_due_games()` | `number` (games ended) | **service_role only** (cleanup cron); no `auth.uid()` check. Ends every `active` game with `deadline_at <= now()`, setting `ended_at = deadline_at` (the backstop for the effective status) | `42501` for any other role |
+| `play_again(game_id uuid)` | `games` row (the **new** game) | any player of the old game; the old game must be effectively ended (`ended`, or `active` past `deadline_at`). Under the old game's row lock: if `next_game_id` is set and that game still exists, returns it unchanged (one rematch per game, whoever asks; a later caller is **not** joined, they `join_game(next_join_code, …)`). Otherwise creates a lobby exactly like `create_game` without a deadline (fresh join code, `expires_at`, `deadline_at = now() + 24 h` for the host to edit in the lobby, `deadline_extended_at = null`, `countdown_ends_at = null`, `end_reason = null`, 25 squares) with the same `name` and `free_center`, squares copied by position (`label`, `details`, `target_count`; `current_count = 0`, nothing completed, no media; a free center that `start_game` labelled `'FREE'` goes back to blank), the caller as host and player color 0 under their `display_name` from the old game, `is_ready = false`; then sets the old row's `next_game_id` / `next_join_code` (members see it via RLS, Realtime and resync) | `not_authenticated`, `game_not_found`, `game_not_ended`, `join_code_generation_failed` (practically never) |
+| `register_media(game_id uuid, position integer, storage_path text, kind text)` | `media` row | any player; game `active` or `ended`, before `expires_at`; square must be completed. While live: any completed square. After the end (`ended`, or `active` past its deadline; the end is `ended_at`, or `deadline_at` for an overdue game): the caller's **own** completed squares (`completed_by_player_id` = their player row) until `expires_at`, anyone's completed square (the free center included) only until 10 minutes after the end (uploads in flight at a blackout or the host's end), otherwise `not_allowed`; a repeat of a registration that already exists (same path, player and square) still returns its row. `storage_path` = `<game_id>/<segments>` where each segment matches `[A-Za-z0-9_-][A-Za-z0-9._-]*`, max 512 chars; `kind` is `'photo'` or `'video'`. Same path again by the same player/square → returns the existing row | `not_authenticated`, `game_not_found`, `game_not_started` (lobby), `game_expired`, `invalid_kind`, `invalid_storage_path`, `invalid_position`, `square_not_completed`, `not_allowed` (someone else's square, more than 10 minutes after the end), `invalid_storage_path` (path already used by someone else) |
+| `auto_end_due_games()` | `number` (games ended) | **service_role only** (cleanup cron); no `auth.uid()` check. Ends every `active` game with `deadline_at <= now()`, setting `ended_at = deadline_at` and `end_reason = 'deadline'` (the backstop for the effective status) | `42501` for any other role |
 
 `peek_game_public` is deliberately the **single function `anon` may execute** (SQL test (n) checks
 the whole catalog): link previews are fetched by crawlers with no session, the join code is
@@ -329,7 +350,7 @@ Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs th
 
 ### Return shapes
 
-- `games`: `id, join_code, name, host_user_id, status ('lobby'|'active'|'ended'), free_center, created_at, started_at, ended_at, deadline_at, deadline_extended_at, expires_at, next_game_id, next_join_code, updated_at`. `updated_at` (not null, `= created_at` on insert) is stamped with `clock_timestamp()` by a `before update` trigger after the row lock, like squares, so it strictly increases with every change of the row (every RPC result carries it). `deadline_at` is never null; `deadline_extended_at` is null until `extend_deadline`. The last two are null until `play_again` creates the rematch; `next_join_code` is that game's `join_code`, so members of the old game can join it without being able to read it (`next_game_id` is nulled if the rematch is ever deleted). The client `Game` type marks `deadline_extended_at`, `next_game_id`, `next_join_code` and `updated_at` optional (snapshots cached by older builds lack them): read them with `?? null`.
+- `games`: `id, join_code, name, host_user_id, status ('lobby'|'active'|'ended'), free_center, created_at, started_at, ended_at, deadline_at, deadline_extended_at, expires_at, next_game_id, next_join_code, updated_at, countdown_ends_at, end_reason ('host'|'deadline'|'blackout'|null)`. `countdown_ends_at` is `started_at + 5 s` (null in a lobby and on games started before it existed; never before `started_at`); `end_reason` is non-null exactly when `status = 'ended'`. `updated_at` (not null, `= created_at` on insert) is stamped with `clock_timestamp()` by a `before update` trigger after the row lock, like squares, so it strictly increases with every change of the row (every RPC result carries it). `deadline_at` is never null; `deadline_extended_at` is null until `extend_deadline`. The last two are null until `play_again` creates the rematch; `next_join_code` is that game's `join_code`, so members of the old game can join it without being able to read it (`next_game_id` is nulled if the rematch is ever deleted). The client `Game` type marks `deadline_extended_at`, `next_game_id`, `next_join_code`, `updated_at`, `countdown_ends_at` and `end_reason` optional (snapshots cached by older builds lack them): read them with `?? null` (or `countdownEndsAt` / `endReason` in `lib/game/types.ts`).
 - `players`: `id, game_id, user_id, display_name, color (0–9 palette index), is_ready, joined_at`. "Me" is the row whose `user_id` equals the session user id.
 - `squares`: `id, game_id, position, label, details, target_count, current_count, completed_by_player_id (null + completed_at set = free center), completed_at (null = open), updated_at`.
 - `media`: `id, game_id, square_id, player_id, storage_path, kind ('photo'|'video'), created_at`.
@@ -348,12 +369,13 @@ Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs th
 | `game_ended` | "This game has already ended." |
 | `game_full` | "This game is full (10 players)." |
 | `game_not_in_lobby` | "The game has already started." (lobby-only action) |
-| `game_not_active` | "The game isn't live." (lobby, ended, or past its deadline) |
+| `game_not_active` | "The game isn't live." (lobby, ended (a blackout included), or past its deadline) |
+| `countdown_in_progress` | "Hang on, the game starts in a moment." (a completion / +1 / undo during the 5-second start countdown; the phone retries it) |
 | `game_not_ended` | "The game isn't over yet." (`play_again` on a lobby or live game) |
 | `game_not_started` | "Media can be added once the game starts." |
 | `game_expired` | "This album has expired." |
 | `not_host` | "Only the host can do that." |
-| `not_allowed` | "Only the person who completed it or the host can undo this." / the free space can't be undone / the host tried to remove themselves |
+| `not_allowed` | "Only the person who completed it or the host can undo this." / the free space can't be undone / the host tried to remove themselves / `register_media` on someone else's square more than 10 minutes after the end |
 | `host_cannot_leave` | "The host can't leave. End the game instead." |
 | `player_not_found` | "That player has already left." (`remove_player` on someone not in the game) |
 | `players_not_ready` | "Everyone needs to tap Ready first." |
@@ -390,7 +412,10 @@ Policy helpers (EXECUTE for `authenticated`, used by RLS; the UI rarely needs th
 - **Storage** (`game-media`, private, 50 MB, jpeg/png/webp/heic/mp4/quicktime/webm): object name
   `<game_id>/<position>/<uuid>.<ext>` (lower-case game id as returned by the DB). Members may upload
   while the game is active or ended and before `expires_at`, only as themselves; upload with
-  `upsert: false` (there is no UPDATE policy). Then call `register_media` with the same path. Read
+  `upsert: false` (there is no UPDATE policy). Then call `register_media` with the same path (after
+  the end it takes only the caller's own squares, or anyone's within 10 minutes of the end; the
+  storage policy itself stays open until `expires_at` and the phone removes an object the RPC
+  refused). Read
   only via `createSignedUrl` (members only). The uploader or the host may delete an object (there is
   no RPC that deletes a `media` row yet).
 - **Cron** (`/api/cron/cleanup`, service-role client): `rpc("auto_end_due_games")`, then remove
@@ -427,14 +452,19 @@ compiler's printer, 2-space indent) and keep the header comment.
   test and exits non-zero on any failure or if a required id (a)–(n) did not pass.
 - Writing a test: `select tests.run('<id>', '<description>', $body$ <plpgsql block> $body$);`. The
   block runs in a subtransaction that is always rolled back. Use `tests.make_game(n, free_center,
-  squares)` / `tests.start_game(f)` fixtures, `tests.pass_deadline(game_id, ago)` (time travel as
+  squares)` / `tests.start_game(f)` fixtures (`tests.start_game(f)` also skips the 5-second start
+  countdown; `tests.start_game(f, false)` keeps it), `tests.pass_countdown(game_id)` (ends the
+  countdown now: `countdown_ends_at = now()`), `tests.pass_deadline(game_id, ago)` (time travel as
   postgres: moves `deadline_at` to `now() - ago` and `created_at` / `started_at` back with it, since
-  `now()` is fixed within a test), `tests.login(uid)` / `tests.login_anon()` /
+  `now()` is fixed within a test), `tests.pass_end(game_id, ago)` (an ended game's `ended_at` to
+  `now() - ago`, for the post-game media grace), `tests.login(uid)` / `tests.login_anon()` /
   `tests.login_service()` / `tests.logout()` to switch roles (sets `request.jwt.claims` and
   `SET LOCAL ROLE`), and `tests.is` / `tests.ok` / `tests.throws(stmt, code)` /
   `tests.denied(stmt)` (privilege missing) / `tests.rls_denied(stmt)` (RLS rejected the row).
   `*.test.sh` files get the database URL as `$1` and print their own PASS/FAIL line (used for the
-  multi-session tests: concurrent joins (t) and concurrent counter +1s (v)).
+  multi-session tests: concurrent joins (t), concurrent counter +1s (v), concurrent rematches (ab)
+  and concurrent last completions ending one blackout (as); they call `tests.pass_countdown` after
+  a start).
 - Shim caveat: the shim only emulates what the migrations touch: the `anon` / `authenticated` /
   `service_role` / `authenticator` roles, Supabase-style default privileges on `public`,
   `auth.users` (stub) and `auth.uid()/jwt()/role()` read from `request.jwt.claims`, stub
@@ -450,9 +480,10 @@ compiler's printer, 2-space indent) and keep the header comment.
 
 - **`src/components/`**: `home` (home page, `YourGames`, `InstantReturn`), `create` (form + pack
   picker), `join` (`/g/[code]`), `lobby` (paper lobby: board, `SquareEditor`, dock, invite, `SyncDot`),
-  `game` (`GameScreen` routes lobby / board / recap by status, `StartTransition`), `board` (live
+  `game` (`GameScreen` routes lobby / countdown / board / recap by status, `StartTransition`), `board` (live
   board: `BoardScreen`, `TopBar`, grid, sheets, toasts, `Celebration`), `media` (add/share buttons,
-  strip, `useUploadedMedia`), `recap` (summary, story viewer, save / zip), `pwa` (SW registration),
+  strip, `useUploadedMedia`), `recap` (summary, "Your squares" (`YourSquaresMedia`), story viewer,
+  save / zip), `pwa` (SW registration),
   `ui` (buttons, sheet, fields), `paper` (`PaperPage`), `providers` (`SessionProvider`, `SessionGate`).
 - **Identity** (`lib/supabase/auth.ts`): `ensureSession()` (deduped) returns the stored session, signs
   in anonymously only when nothing is stored or the server says the refresh token is dead
@@ -479,6 +510,21 @@ compiler's printer, 2-space indent) and keep the header comment.
   `null` = server default, 24 h), `setDeadline(gameId, deadlineAt)` (lobby),
   `extendDeadline(gameId, deadlineAt)` (live, once). The board sheets' "Ends <when> (<left>)" line
   reads `deadline_at` (`useDeadlineLine` in `components/board/PlayersSheet.tsx`).
+- **Start countdown** (`GameScreen`): a live game whose `countdown_ends_at` has not passed
+  (`isInCountdown`) is the `countdown` phase: the paper `StartCountdown` placeholder
+  (`data-testid="start-countdown"`, the whole seconds left, never 0; the screen keeps
+  `data-status="active"` with `data-phase="countdown"`). `useRerenderAt(countdown_ends_at)` flips it to
+  the board the instant it passes; a lobby or countdown → board flip seen live on this mount plays
+  `StartTransition` over the freshly mounted board, so phones that open the game after the countdown
+  (reload, late join, instant return) go straight to the board. Every phone counts down to the server
+  stamp on its own clock; `lib/game/serverClock.ts` estimates the skew from RPC results that carry a
+  fresh server stamp (`start_game`'s `started_at`, the `updated_at` of `update_square` /
+  `set_deadline` / `extend_deadline` and applied square results; midpoint of the round trip, shortest
+  round trip wins) and corrects only a skew clearly beyond the measurement error (> 300 ms past half
+  the round trip). Caveat: a phone without such a sample (joined, readied, edited nothing) counts on
+  its own clock, so phones show the board as far apart as their clocks are; a tap that beats the
+  server's countdown gets `countdown_in_progress` and is retried. The `bingo.activeGame` snapshot
+  carries `countdown_ends_at` (and `end_reason`).
 - **Deadline UI** (pure helpers in `lib/deadline/`, clocks in `useNow.ts`, all text only after mount):
   `CreateGameForm` holds the `DeadlinePicker` value (its mount `onChange` fills Tonight) and sends it as
   `deadlineAt`. A selected preset that drifts under 10 minutes away re-resolves the moment it does
@@ -493,14 +539,40 @@ compiler's printer, 2-space indent) and keep the header comment.
   when that leaves too little room the countdown shows only its leading unit ("23h", never cut mid-unit).
   `BoardScreen` pushes `deadlineToast()` ("1 hour left.", tap → Players) when `shouldShowDeadlineToast`
   says so: under an hour and not yet shown for this deadline value, remembered in
-  `bingo.deadlineToast.<gameId>`, so a reload never repeats it and an extension allows one more. The
-  host's "Extend deadline" (Players sheet, hidden once `deadline_extended_at` is set) opens
-  `ExtendDeadlineForm` (+1 h / +3 h / +24 h / custom, ≤ current + 24 h, `lib/deadline/extend.ts`) →
-  `extendDeadline`, shown at once via an overlay, reverted with inline copy on error. When the clock ends
-  a live game, `GameScreen` sends `game_ended` with `by: "auto"` from the host's phone only.
+  `bingo.deadlineToast.<gameId>`, so a reload never repeats it and an extension allows one more.
+- **Host controls** (`components/board/SettingsSheet.tsx`, `HostSection`): the board's Settings sheet
+  (the gear; no other board button) opens with a "Host" section (`data-testid="settings-host"`) on the
+  host's phone only (`BoardScreen` passes `host` controls only when `me` is the host; the RPCs enforce
+  it regardless): "Extend deadline" (hidden once `deadline_extended_at` is set, then the muted
+  "Deadline extended once" line) closes Settings and opens `ExtendDeadlineForm` (+1 h / +3 h / +24 h /
+  custom, ≤ current + 24 h, `lib/deadline/extend.ts`) → `extendDeadline`, shown at once via an
+  overlay, reverted with inline copy on error; "End game" asks to confirm ("Keep playing" backs out) →
+  `endGame` → `game_ended` `by: "host"`. The Players sheet keeps the player list and the deadline line
+  only. When the clock ends a live game, `GameScreen` sends `game_ended` with `by: "auto"` from the
+  host's phone only.
+- **Blackout**: the server ends the game with the 25th completion. When a settled `square_result`
+  leaves no square open (`settledIntoBlackout` in `useBoardState`), the board calls `refresh()` at once
+  so the ended row arrives without waiting for the poll; other phones get it via Realtime / the
+  resync. `GameScreen` then shows the recap (`data-end-reason` on `game-ended`); the phone whose player
+  crossed off the finishing square (`blackoutFinisher` in `lib/game/blackout.ts`: its `completed_at`
+  equals `ended_at`) sends `game_ended` with `by: "blackout"`, once.
+- **Start and end moments** (visual layer only; they read state and never change it): during the
+  countdown phase `StartCountdown` (`components/game/`) draws pencil digits 5→1 over the dimmed, inert
+  lobby from `countdownSecondsLeft(serverNow())` (same digit on every phone) with a `pulse()` per tick,
+  then B's flip plays `StartTransition`. When a game goes from live to ended on this phone (a live flip
+  on server-confirmed data, `lib/game/endSequence.ts` decides), `EndSequence` plays over the already
+  mounted recap: `end_reason = 'blackout'` → `BlackoutSequence` (22 marquee bulbs around "BLACKOUT",
+  chase → flash → flicker → die out → dark, ~3.9 s, themed: amber filaments on Scoreboard, marker
+  bulbs on Whiteboard; `Celebration` skips its own blackout overlay) → `CreditsCard` (name, date,
+  players in their colors, n/25, Skip ≥ 44 px, auto-advance ~3.2 s) → recap; `'host'`/`'deadline'` →
+  a ~1 s buzzer card ("Game over" / "Time's up", `doublePulse()`) → credits → recap. Opacity and
+  transform only (plus the digits' stroke draw-in); reduced motion = fades and static cards. It plays
+  once per phone: `bingo.endSeen.<gameId>` is written as it starts, so reloads, mid-sequence opens and
+  already-ended games show only the recap.
 - **Optimistic layer**: taps go into `pendingActions.ts` (one queue per game, persisted to
   `bingo.pending.<gameId>`): one action at a time per square, squares in parallel, only while online,
-  exponential backoff (≤ 30 s) on `unknown` / `not_authenticated`, any other error code is final
+  exponential backoff (≤ 30 s) on `unknown` / `not_authenticated` / `countdown_in_progress` (a tap that
+  beat the server's start countdown), any other error code is final
   (game-over codes drop the whole queue; ≤ 50 items). `boardState.ts` derives the board as base (newer of
   server row and this phone's last RPC result) + unsettled overlays in tap order, so refetches never
   flip a pending cross-off back; a settled `square_result` row always wins (`applied = false` just
@@ -514,7 +586,8 @@ compiler's printer, 2-space indent) and keep the header comment.
   Queue items saved by older builds (with `expectedCount`) still restore; the field is ignored.
 - **Feedback**: `diffBoards` events → `toasts.ts` (one toast at a time, 2.5 s, ≤ 4 waiting; also
   `mediaToasts`; `GameScreen` shows `droppedNotices` for given-up taps), `celebrations.ts` (each line / blackout once per phone, remembered in
-  `bingo.celebrated.<gameId>`; highlight → overlay → host blackout prompt), `lib/haptics.ts`
+  `bingo.celebrated.<gameId>`; highlight → overlay; a blackout no longer prompts the host, the server
+  ends the game), `lib/haptics.ts`
   (`pulse` on own cross-off / start, `doublePulse` on bingo; no-op where `navigator.vibrate` is missing).
 - **Settings** (`lib/settings`): `bingo.settings` = `{ theme, textSize, squareSize }`, validated per
   field; `theme: null` follows `prefers-color-scheme`. `BoardScreen` sets `data-theme` /
@@ -533,6 +606,15 @@ compiler's printer, 2-space indent) and keep the header comment.
   `register_media`; wired in `defaultUploadQueue.ts`) → `applyMedia`. Display only through
   `signedUrls.ts` (1 h URLs, batches of 50, cached, re-signed 5 min before expiry). The recap
   (`components/recap`) builds items in board order, saves per item (share sheet / download) or zips all.
+  **After the end** (`lib/game/postGameMedia.ts`, mirroring `register_media`): `mediaGate` allows a
+  player's own completed squares until the album expires, anyone's completed square only within
+  `POST_GAME_MEDIA_GRACE_MS` (10 min) of the end; `MediaActions` hides Add photo/video otherwise
+  ("Now the game is over, only whoever crossed it off…"). The recap summary's "Your squares"
+  (`YourSquaresMedia`, `data-testid="recap-your-squares"` / `your-square`; the viewer from
+  `useSession`, so the media lab's fake recap has none) lists the viewer's own completed squares, each
+  with `AddMediaButton`. Uploads run in the app-wide queue and `useUploadedMedia` lives at the game
+  screen, so an upload in flight when a blackout (or the host) ends the game still registers within
+  the grace and appears in the recap.
 - **Rematch** (`PlayAgainLink` in `components/recap/RecapSummary.tsx`, wired from `GameScreen` via
   `Recap`'s `playAgain` prop; the media lab leaves it out): one small muted text link, the very last
   thing in the recap summary. No `next_join_code` on the game → "Play again" (`playAgain` →
@@ -552,7 +634,7 @@ compiler's printer, 2-space indent) and keep the header comment.
   `NEXT_PUBLIC_ENABLE_SW=1` (the e2e sets it), as `/sw.js?supabase=<origin>[&dev=1]`.
 - **Browser storage keys** (all through `lib/storage/local.ts`, never throwing): `bingo.displayName`,
   `bingo.settings`, `bingo.activeGame`, `bingo.lastEnded`, `bingo.pending.<gameId>`,
-  `bingo.celebrated.<gameId>`; sessionStorage `bingo.stayHome`; auth lives in @supabase/ssr cookies
+  `bingo.celebrated.<gameId>`, `bingo.deadlineToast.<gameId>`, `bingo.endSeen.<gameId>`; sessionStorage `bingo.stayHome`; auth lives in @supabase/ssr cookies
   `sb-<ref>-auth-token[.N]`.
 - **Tests**: `npm run test` (Vitest, `src/**/*.test.ts`, node env), `npm run e2e` (Playwright,
   Chromium 375×812, starts or reuses `next dev` on :3000 with `NEXT_PUBLIC_SYNC_POLL_MS=1500`),

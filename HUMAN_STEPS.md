@@ -30,7 +30,7 @@ against a local Postgres + PostgREST + GoTrue stand-in (see
 npm install
 npx supabase login            # opens a browser for an access token
 npx supabase link --project-ref <ref>
-npx supabase db push          # applies supabase/migrations/* in order (7 files)
+npx supabase db push          # applies supabase/migrations/* in order (8 files)
 ```
 
 Deploy order matters: the app and the schema must move together (`npx supabase db push`,

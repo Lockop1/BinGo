@@ -57,6 +57,8 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
 
 ## 3. Join (Phone B)
 
+Alternative without a link: **Phone B** opens the app URL, finds "Got a code? Join a game" under New game, types the code as **abcd 2345** (lower case and a space are fine), taps "Join" and lands on the join screen below. A wrong code shows "We couldn't find that game." right there.
+
 1. **Phone B (friend):** tap the link in the chat.
    - [ ] You see "You're invited to", then **Friday Test**, then "Lobby · 1/10 players".
 2. **Phone B:** enter **Jamie** under "Your name" and tap "Join".
@@ -82,11 +84,11 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
    - [ ] **Phone A:** that square shows a small "×3" within about a second.
    - If it fails → if Phone A only changes after ~15 s, check the Realtime publication. A red error under the
      form points to RLS or the `update_square` RPC.
-3. **Phone A:** turn off the switch "Free space in the center". The text below it changes to "The center is a normal square."
-   - [ ] **Phone B:** the center "FREE" turns into an empty square showing "+".
-   - **Phone A:** turn the switch back on ("Starts crossed off for everyone.").
-   - [ ] **Phone B:** the center reads "FREE" again. Tap it: a "Free space" sheet says
-     "Alex (the host) can turn it off to make it a normal square." There is no switch on Phone B.
+3. **Phone B:** tap the center "FREE" square.
+   - [ ] A "Free space" sheet says "Free space was set when the game was created.", with no switch or other control.
+   - **Phone A (host):** tap the center too.
+   - [ ] The same sheet, also with no switch: the free space is chosen only on the Create screen (step 1), and the
+     lobby has no free-space control anywhere, not even for the host.
 4. **Phone B:** tap "Leave" (top right).
    - [ ] Phone B goes to home. **Phone A** shows "Players 1/10" within about a second.
    - **Phone B:** open the invite link from the chat again and tap "Join" (the name is filled in).
@@ -115,8 +117,11 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
 ## 5. Start
 
 1. **Phone A (host):** tap "Start game".
-   - [ ] **Both phones:** a quick (~1 s) animation turns the paper board into the game board. Phone B plays it
-     within about a second of A (up to 15 s).
+   - [ ] **Both phones:** the lobby dims and big pencil digits "5, 4, 3, 2, 1" are sketched over it, one per second,
+     under "Starting in", with a short buzz on each (Android). Hold the phones side by side: they show the **same
+     digit at the same moment** (Phone B may start a second late, up to 15 s without Realtime, but it still lands on
+     the same digits).
+   - [ ] At zero, a quick (~1 s) animation turns the paper board into the game board on both phones together.
    - [ ] **Phone A (dark mode):** near-black board with bold, condensed lettering ("Dark Scoreboard").
      **Phone B (light mode):** white board with marker writing ("Whiteboard").
    - [ ] The top bar shows **Friday Test**, then a small grey "23h <n>m", colored player dots with "2", a gear icon
@@ -176,9 +181,11 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
     - [ ] Within a few seconds "offline" disappears. Phone A crosses it off with "Jamie got Stranger takes our group photo".
     - If it fails → if the square flips back, or Phone A never gets it, note it as a reconnect bug.
 11. **Phone B:** tap the small "23h <n>m" after the game name.
-    - [ ] The "Players" sheet opens with "Ends tomorrow <time> (23h <n>m)". There is no "Extend deadline". Close it.
-12. Extend once. **Phone A (host):** open the "Players" sheet, tap "Extend deadline", leave "+1 hour" and tap "Save".
-    - [ ] Both small countdowns change from "23h <n>m" to "1d" (Phone B within about a second). Phone A's sheet
+    - [ ] The "Players" sheet opens with "Ends tomorrow <time> (23h <n>m)". Close it. Tap the gear: the settings
+      sheet has **no "Host" section** (only Board theme, Text size, Square size).
+12. Extend once. **Phone A (host):** tap the gear. At the top, a "Host" section shows "Extend deadline" and
+    "End game". Tap "Extend deadline", leave "+1 hour" and tap "Save".
+    - [ ] Both small countdowns change from "23h <n>m" to "1d" (Phone B within about a second). The Host section
       now reads "Deadline extended once" instead of the button.
     - If it fails → "Only the host can do that." means Phone A's sign-in changed since it created the game
       (cleared storage, a private tab or another browser): note it. "The deadline can only be extended once." on a
@@ -198,9 +205,7 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
 2. **Both phones:** reload the page.
    - [ ] The board comes back with the row crossed off and **no** "BINGO!" again.
    - If it fails → a repeat after reload means the browser isn't keeping site storage (Private tab, or storage blocked).
-3. Optional (slow): cross off every square (the counter needs 15).
-   - [ ] "BLACKOUT!" with "Every square crossed off." Then, on Phone A only, a "Blackout!" sheet with
-     "End game" / "Keep playing". Tap "Keep playing".
+3. Do **not** cross off every square yet: a full board now ends the game on its own (see §15 for that run).
 
 ## 8. Instant return
 
@@ -220,12 +225,17 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
 ## 9. End the game and the recap
 
 1. **Phone B (friend):** tap the player dots in the top bar. The "Players" sheet shows "2/10 playing", each player's
-   "<n> squares" and "Ends <when> (<time left>)". There is no "End game" button. Close the sheet.
-   **Phone A (host):** open the same sheet and tap "End game".
+   "<n> squares" and "Ends <when> (<time left>)". There is no "End game" button anywhere on Phone B. Close the sheet.
+   **Phone A (host):** tap the gear, then "End game" in the "Host" section.
    - [ ] "End the game for everyone? The board locks and the album opens." with "End game" / "Keep playing".
      Tap "End game".
-   - [ ] **Both phones** show "Night recap" and **Friday Test** (Phone B within about a second, up to 15 s), with
-     "<n>/25 squares", "1 bingo line", "Row 3" and each player's count.
+   - [ ] **Both phones** cut to dark with a thick bar and "Game over" (about a second, a double buzz on Android),
+     then a dark title card: **Friday Test**, today's date, "Starring" **Alex** and **Jamie** in their colors, and
+     "<n>/25 squares crossed off", with "Skip" at the bottom right. It moves on by itself after ~3 s (or tap Skip).
+   - [ ] **Both phones** then show "Night recap" and **Friday Test** (Phone B within about a second, up to 15 s), with
+     "<n>/25 squares", "1 bingo line", "Row 3" and each player's count. Reload: the recap comes straight back with
+     no title card.
+   - [ ] "Your squares" lists each square you crossed off with "Add photo/video" (your own squares only).
    - [ ] "Album available until <weekday, month day>" (30 days after the game was created) and "Save before it's gone."
 2. **Phone B:** tap "Watch the recap".
    - [ ] A full-screen story shows "1 of <n>", the photo, "Sing on stage at karaoke" and **Jamie**. Tap the right side
@@ -285,14 +295,29 @@ Setup is covered in [`HUMAN_STEPS.md`](HUMAN_STEPS.md) and [`DEPLOY.md`](DEPLOY.
    "I'm ready", Phone A starts it.
    - [ ] Under an hour left, so each phone shows "1 hour left." once in the top bar (tapping it opens "Players").
      A reload doesn't show it again. The small countdown reads "<n>m" and counts down.
-   - [ ] At the deadline, **both phones** switch to "Night recap" on their own (no one taps anything).
+   - [ ] At the deadline, **both phones** cut to the dark "Time's up" card on their own, then the title card, then
+     "Night recap" (no one taps anything).
    - If it fails → a phone that stays on the board after the deadline had its clock off; note the phone's time.
+
+## 15. Blackout (optional, slow: every square)
+
+1. Start a fresh game from §1 (any deadline), both ready, Phone A starts it. Cross off all 25 squares between the two
+   phones (the "Collect 15 stranger signatures" counter needs 15 taps). Make the **last** one on Phone B.
+   - [ ] The instant the 25th lands, **both phones** show "BLACKOUT" ringed by marquee light bulbs that chase around,
+     flash together, flicker and die out one by one until the screen goes dark (3–4 s). On Phone A (dark mode) the bulbs
+     are warm scoreboard bulbs; on Phone B (light mode) they are marker-drawn. No "Keep playing" prompt appears.
+   - [ ] Then the title card (**Friday Test**, date, both names, "25/25 squares crossed off"), then "Night recap"
+     with "25/25 squares". Nobody tapped "End game".
+   - [ ] A photo added a moment before the last square still shows in the recap on both phones.
+   - [ ] Reload either phone: straight to the recap, no sequence again.
+   - If it fails → a full board that stays live means the `complete_square` / `increment_square` blackout rule is missing
+     (migrations not pushed, HUMAN_STEPS.md §2). A missing photo points to `register_media`'s 10-minute grace.
 
 ## Expected NOT to work (not bugs)
 
 - No vibration on iPhone. Safari has no vibration support.
 - "Download all" makes a zip, which is clunky to open on iPhone. Use per-photo "Save" instead.
-- No host transfer: the host can't leave a lobby (only "End game"). If the host's phone dies, the game ends at its deadline.
+- No host transfer: the host can't leave a lobby (only "End game" in the lobby header or in Settings → Host). If the host's phone dies, the game ends at its deadline.
 - No accounts: "Your games" lives on one phone and one browser. Clearing browser data or switching phones loses it.
   On iPhone, Safari may also clear it after about 7 days of not opening the app.
 - Link previews are cached by chat apps. An old card can keep showing an old player count.

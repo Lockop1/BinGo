@@ -4,12 +4,13 @@ import { useEffect, useState } from "react";
 import { AddMediaButton } from "@/components/media/AddMediaButton";
 import { ShareButton } from "@/components/media/ShareButton";
 import { GAME_ERROR_COPY } from "@/lib/game/errors";
-import { effectiveStatus, type Game, type Player, type Square } from "@/lib/game/types";
+import { mediaGate, type MediaGate } from "@/lib/game/postGameMedia";
+import type { Game, Player, Square } from "@/lib/game/types";
 import type { prepareMedia } from "@/lib/media/prepare";
 import type { UploadQueue } from "@/lib/media/uploadQueue";
 
 type Props = {
-  game: Pick<Game, "id" | "name" | "join_code" | "status" | "deadline_at" | "expires_at">;
+  game: Pick<Game, "id" | "name" | "join_code" | "status" | "deadline_at" | "ended_at" | "expires_at">;
   square: Pick<Square, "position" | "label" | "completed_at" | "completed_by_player_id">;
   me: Pick<Player, "id"> | null;
   players: readonly Player[];
@@ -23,10 +24,20 @@ type Props = {
   prepare?: typeof prepareMedia;
 };
 
+/** Why "Add photo/video" is not offered, by gate (`ok` and the stored-status fallback have none). */
+const GATE_HINT: Record<Exclude<MediaGate, "ok">, string> = {
+  lobby: GAME_ERROR_COPY.game_not_started,
+  expired: GAME_ERROR_COPY.game_expired,
+  not_done: "Complete it to add a photo or video.",
+  not_yours: "Now the game is over, only whoever crossed it off can add photos or videos.",
+};
+
 /**
  * The square sheet's media row: "Add photo/video" (once the square is done,
- * while the game is live or ended and the album hasn't expired) and "Share to
- * group chat". The RPC re-checks all of this; hiding is only a courtesy.
+ * while the game is live, or after the end for the player who crossed it off
+ * (anyone during the 10 minutes right after the end), until the album
+ * expires; see postGameMedia.ts) and "Share to group chat". `register_media`
+ * re-checks all of this; hiding is only a courtesy.
  */
 export function MediaActions({ game, square, me, players, pending = false, queue, prepare }: Props) {
   // The clock is read after mount (never during a prerender); until then the
@@ -36,14 +47,17 @@ export function MediaActions({ game, square, me, players, pending = false, queue
     const id = window.setTimeout(() => setNow(Date.now()), 0);
     return () => window.clearTimeout(id);
   }, []);
-  const status = now === null ? game.status : effectiveStatus(game, new Date(now));
-  const expired = now !== null && new Date(game.expires_at).getTime() <= now;
-  const done = square.completed_at !== null;
+  const gate: MediaGate =
+    now !== null
+      ? mediaGate(game, square, me?.id ?? null, new Date(now))
+      : game.status === "lobby"
+        ? "lobby"
+        : square.completed_at === null
+          ? "not_done"
+          : "ok";
 
   let hint: string | null = null;
-  if (status === "lobby") hint = GAME_ERROR_COPY.game_not_started;
-  else if (expired) hint = GAME_ERROR_COPY.game_expired;
-  else if (!done) hint = "Complete it to add a photo or video.";
+  if (gate !== "ok") hint = GATE_HINT[gate];
   else if (pending) hint = "You can add a photo or video once this is saved.";
 
   return (

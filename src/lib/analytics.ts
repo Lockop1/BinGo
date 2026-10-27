@@ -47,7 +47,8 @@ export const EVENT_SCHEMA: Readonly<Record<AnalyticsEvent, Readonly<Record<strin
     blackout: bool,
     duration_min: count,
     player_count: count,
-    by: oneOf("host", "auto"),
+    // host: end_game; auto: the deadline passed; blackout: the 25th square ended it on the server.
+    by: oneOf("host", "auto", "blackout"),
   },
   recap_viewed: { media_count: count },
   play_again: { source: oneOf("recap") },
